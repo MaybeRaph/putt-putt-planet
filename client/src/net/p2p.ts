@@ -4,6 +4,8 @@
  * their public addresses through home routers; no game data goes through them.
  */
 
+import { COMPACT_PREFIX, cleanCompact, packCompact, unpackCompact } from './compactCode';
+
 export const ICE_SERVERS: RTCIceServer[] = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
   { urls: 'stun:stun.cloudflare.com:3478' },
@@ -43,13 +45,29 @@ function slimSdp(sdp: string): string {
     .join('\r\n') + '\r\n';
 }
 
-export async function encodeCode(p: InvitePayload): Promise<string> {
+/** Older, longer format; still produced when an SDP doesn't fit the compact shape. */
+export async function encodeLegacyCode(p: InvitePayload): Promise<string> {
   const json = JSON.stringify({ ...p, sdp: slimSdp(p.sdp) });
   const packed = await pipeThrough(new TextEncoder().encode(json), new CompressionStream('deflate-raw'));
   return PREFIX + toB64Url(packed);
 }
 
+export async function encodeCode(p: InvitePayload): Promise<string> {
+  return packCompact(p) ?? encodeLegacyCode(p);
+}
+
 export async function decodeCode(code: string): Promise<InvitePayload> {
+  // People paste whole chat messages ("Join my game! … paste: PPP2…"), so look for the code
+  // inside the text rather than insisting it starts there.
+  const cleaned = cleanCompact(code);
+  const at = cleaned.indexOf(COMPACT_PREFIX);
+  if (at >= 0 && !cleaned.startsWith('PPP1')) {
+    try {
+      return unpackCompact(cleaned.slice(at));
+    } catch {
+      throw new Error('That code is incomplete or damaged — copy the whole thing');
+    }
+  }
   const c = code.trim().replace(/\s+/g, '');
   if (!c.startsWith(PREFIX)) throw new Error("That doesn't look like a Putt-Putt Planet code");
   try {

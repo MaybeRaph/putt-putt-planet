@@ -306,7 +306,7 @@ export class Screens {
   /** Guest flow for a direct game: paste invite -> send back reply -> wait for the host. */
   joinDirect(): void {
     const g = this.game;
-    const input = h('textarea', { class: 'code-box', rows: 4, placeholder: 'PPP1.…', spellcheck: false });
+    const input = h('textarea', { class: 'code-box', rows: 4, placeholder: 'PPP2…', spellcheck: false });
     const step2 = h('div', { class: 'join-step2' });
     const go = h('button', { class: 'btn primary big' }, 'Next ▶');
     go.onclick = async () => {
