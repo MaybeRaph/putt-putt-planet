@@ -15,7 +15,8 @@ export type Vec2 = z.infer<typeof Vec2Schema>;
 export const SurfaceSchema = z.enum(['grass', 'sand', 'ice', 'sticky', 'rubber', 'metal', 'candy']);
 
 export const SolidSchema = z.object({
-  shape: z.enum(['box', 'cylinder']),
+  /** ribbon: a smooth strip along `path` (slides, spirals); size = [unused, thickness, width]. */
+  shape: z.enum(['box', 'cylinder', 'ribbon']),
   /** floor: walkable, checker-rendered. wall: rail. block: solid obstacle. */
   role: z.enum(['floor', 'wall', 'block']),
   center: Vec3Schema,
@@ -26,17 +27,21 @@ export const SolidSchema = z.object({
   surface: SurfaceSchema.default('grass'),
   restitution: num.optional(),
   color: z.string().optional(),
+  /** false: no earth skirt drawn under this floor (tracks that pass over other tracks). */
+  skirt: z.boolean().optional(),
+  /** Ribbon centreline (top surface). */
+  path: z.array(Vec3Schema).optional(),
 });
 export type Solid = z.infer<typeof SolidSchema>;
 
 export const ZoneSchema = z.object({
-  kind: z.enum(['sand', 'ice', 'sticky', 'boost', 'conveyor', 'water', 'lowGravity', 'oneWay']),
+  kind: z.enum(['sand', 'ice', 'sticky', 'boost', 'conveyor', 'water', 'lowGravity', 'oneWay', 'spring']),
   center: Vec3Schema,
   size: Vec3Schema,
   rotY: num.default(0),
   /** Direction (radians around Y, 0 = +X) for boost / conveyor / oneWay. */
   dir: num.default(0),
-  /** boost: target speed; conveyor: acceleration; lowGravity: gravity multiplier. */
+  /** boost: target speed; conveyor: acceleration; lowGravity: gravity multiplier; spring: launch speed up. */
   strength: num.default(1),
 });
 export type Zone = z.infer<typeof ZoneSchema>;
@@ -118,6 +123,13 @@ export const CollectibleSchema = z.object({
 export type Collectible = z.infer<typeof CollectibleSchema>;
 export type CollectibleKind = Collectible['kind'];
 
+/** A covered stretch of fairway: a tube drawn over the centreline (visual only). */
+export const TunnelSchema = z.object({
+  points: z.array(Vec3Schema).min(2),
+  width: num,
+});
+export type Tunnel = z.infer<typeof TunnelSchema>;
+
 export const DecorSchema = z.object({
   kind: z.string(),
   pos: Vec3Schema,
@@ -163,6 +175,7 @@ export const HoleSchema = z.object({
   obstacles: z.array(ObstacleSchema).default([]),
   collectibles: z.array(CollectibleSchema).default([]),
   decor: z.array(DecorSchema).default([]),
+  tunnels: z.array(TunnelSchema).default([]),
   /** Authored centreline tee -> cup (camera hints, rescue, solver). */
   path: z.array(Vec3Schema).min(2),
   tip: z.string().optional(),

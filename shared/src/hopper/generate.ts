@@ -21,6 +21,7 @@ import {
   item,
   makeHole,
   pillar,
+  ribbon,
   room,
   wall,
   zone,
@@ -133,10 +134,40 @@ export function stageHole(seed: number, index: number, spec: StageSpec): Hole {
 }
 
 /** Signature mechanics that turn up on some legs of a hole. */
-type Special = 'ramp' | 'hump' | 'valley' | 'climb' | 'split' | 'jump' | 'plaza' | 'stream' | 'lake' | 'fork';
+type Special =
+  | 'ramp'
+  | 'hump'
+  | 'valley'
+  | 'climb'
+  | 'split'
+  | 'jump'
+  | 'plaza'
+  | 'stream'
+  | 'lake'
+  | 'fork'
+  | 'spiral'
+  | 'slide'
+  | 'drop'
+  | 'leap'
+  | 'loop';
 /** What each polyline segment is (features only go on plain 'flat' stretches). */
 type SegTag =
-  'flat' | 'landing' | 'ramp' | 'arc' | 'kicker' | 'gap' | 'split' | 'plaza' | 'lake' | 'stream' | 'fork';
+  | 'flat'
+  | 'landing'
+  | 'ramp'
+  | 'arc'
+  | 'kicker'
+  | 'gap'
+  | 'split'
+  | 'plaza'
+  | 'lake'
+  | 'stream'
+  | 'fork'
+  | 'lead'
+  | 'spiral'
+  | 'slide'
+  | 'drop'
+  | 'loop';
 type Feature =
   | 'sand'
   | 'bumpers'
@@ -152,13 +183,13 @@ type Feature =
   | 'sticky';
 
 /** Lanes of a forked fairway: one steady route, one quick-but-risky route. */
-type LaneKind = 'sand' | 'slalom' | 'hill' | 'pinball' | 'bridge' | 'boost' | 'jump' | 'machine' | 'ice';
-const SAFE_LANES: LaneKind[] = ['sand', 'slalom', 'hill', 'pinball'];
+type LaneKind = 'sand' | 'slalom' | 'hill' | 'bumpers' | 'bridge' | 'boost' | 'jump' | 'machine' | 'ice';
+const SAFE_LANES: LaneKind[] = ['sand', 'slalom', 'hill', 'bumpers'];
 const LANE_TIP: Record<LaneKind, string> = {
   sand: 'sand traps',
   slalom: 'a pillar slalom',
   hill: 'a big hill',
-  pinball: 'a bumper lane',
+  bumpers: 'a couple of bumpers',
   bridge: 'a narrow bridge',
   boost: 'speed pads along the water',
   jump: 'a jump over the water',
@@ -167,14 +198,25 @@ const LANE_TIP: Record<LaneKind, string> = {
 };
 
 interface ForkPlan {
-  /** Ring length (lanes run between the two cross-bars). */
+  /** Length from where the lanes split to where they rejoin. */
   m: number;
-  /** Lane centre offsets from the axis: lane 0 to the left, lane 1 to the right. */
+  /** Length of the swoop out (and back in) at each end. */
+  sweep: number;
+  /** Lane centre offsets from the axis on the straight middle part: lane 0 left, lane 1 right. */
   hs: [number, number];
   rin: number;
   rout: number;
   lanes: [LaneKind, LaneKind];
-  widths: [number, number];
+}
+
+/** A corkscrew round a tower: one full turn down to a lower tier. */
+interface SpiralPlan {
+  /** +1: the tower is to the left of the leg. */
+  side: 1 | -1;
+  /** Track centreline radius. */
+  R: number;
+  /** Lead-in before the corkscrew starts. */
+  lead: number;
 }
 
 interface Leg {
@@ -185,9 +227,14 @@ interface Leg {
   special: Special | null;
   dy: number;
   fork?: ForkPlan;
+  spiral?: SpiralPlan;
+  /** Sideways swing of a slide. */
+  amp?: number;
+  /** A leap launched by a spring pad (up to a much higher ledge) instead of a kicker ramp. */
+  spring?: boolean;
 }
 
-const SPECIAL_LEN: Record<Exclude<Special, 'fork'>, number> = {
+const SPECIAL_LEN: Record<Exclude<Special, 'fork' | 'spiral'>, number> = {
   ramp: 6.5,
   hump: 9.5,
   valley: 9.5,
@@ -197,6 +244,10 @@ const SPECIAL_LEN: Record<Exclude<Special, 'fork'>, number> = {
   plaza: 10,
   stream: 9,
   lake: 11,
+  slide: 12,
+  drop: 7,
+  leap: 12,
+  loop: 10.5,
 };
 /** Par difficulty points per special. */
 const SPECIAL_DIFF: Record<Special, number> = {
@@ -206,17 +257,32 @@ const SPECIAL_DIFF: Record<Special, number> = {
   climb: 0.8,
   split: 0.5,
   jump: 1.5,
-  plaza: 1.3,
+  plaza: 0.8,
   stream: 1.2,
   lake: 1.0,
   fork: 1.0,
+  spiral: 0.6,
+  slide: 0.5,
+  drop: 0.3,
+  leap: 1.6,
+  loop: 1.2,
 };
 /** Specials that may turn up more than once on a hole. */
-const REPEATABLE: Special[] = ['ramp', 'climb', 'hump', 'stream'];
+const REPEATABLE: Special[] = ['ramp', 'climb', 'hump', 'stream', 'drop', 'slide'];
+/** Specials that change the height of the course. */
+const ELEVATION: Special[] = ['ramp', 'climb', 'spiral', 'slide', 'drop', 'leap'];
 
 /** Whole-hole personalities, so neighbouring holes feel different. */
 export type Archetype =
-  'classic' | 'fork' | 'switchback' | 'drive' | 'summit' | 'waterworks' | 'gauntlet' | 'pinball';
+  | 'classic'
+  | 'fork'
+  | 'switchback'
+  | 'drive'
+  | 'summit'
+  | 'waterworks'
+  | 'gauntlet'
+  | 'funhouse'
+  | 'skyway';
 
 interface ArchStyle {
   minDepth: number;
@@ -271,11 +337,11 @@ const ARCH: Record<Archetype, ArchStyle> = {
     len: [4.5, 6.5],
     width: -0.15,
     specialChance: -0.15,
-    specials: { ramp: 1, valley: 0.5 },
-    features: { bumpers: 1, pillars: 1 },
-    featureChance: -0.1,
-    diag: 0.45,
-    round: -0.25,
+    specials: { ramp: 1, valley: 0.5, drop: 0.6 },
+    features: { pillars: 1 },
+    featureChance: -0.15,
+    diag: 0.55,
+    round: -0.1,
     nouns: ['Zigzag', 'Switchback', 'Hairpins', 'Maze'],
   }),
   drive: style({
@@ -283,7 +349,7 @@ const ARCH: Record<Archetype, ArchStyle> = {
     len: [9, 12.5],
     width: 0.35,
     specialChance: 0.15,
-    specials: { jump: 2, ramp: 1, stream: 0.8 },
+    specials: { jump: 2, ramp: 1, stream: 0.8, slide: 1 },
     features: { boost: 3 },
     diag: 0.15,
     round: 0.2,
@@ -295,7 +361,7 @@ const ARCH: Record<Archetype, ArchStyle> = {
     width: 0.1,
     specialChance: 0.45,
     maxSpecials: 2,
-    specials: { ramp: 2.5, climb: 2.5, hump: 1, valley: 1 },
+    specials: { ramp: 2, climb: 2.5, hump: 1, valley: 1, drop: 1, spiral: 0.8 },
     featureChance: -0.1,
     diag: 0.25,
     round: 0.15,
@@ -307,7 +373,7 @@ const ARCH: Record<Archetype, ArchStyle> = {
     width: 0.1,
     specialChance: 0.35,
     maxSpecials: 1,
-    specials: { stream: 3, lake: 2.5, jump: 0.8 },
+    specials: { stream: 3, lake: 2.5, jump: 0.8, leap: 0.5 },
     features: { pools: 3 },
     round: 0.1,
     nouns: ['Lagoon', 'Rapids', 'Brook', 'Falls'],
@@ -322,22 +388,32 @@ const ARCH: Record<Archetype, ArchStyle> = {
     diag: 0.25,
     nouns: ['Gauntlet', 'Grinder', 'Machine', 'Clockworks'],
   }),
-  pinball: style({
+  funhouse: style({
+    minDepth: 1,
+    len: [6, 9],
+    width: 0.1,
+    specialChance: 0.4,
+    maxSpecials: 1,
+    specials: { loop: 2.5, spiral: 2.5, slide: 1.5 },
+    featureChance: -0.2,
+    round: 0.2,
+    nouns: ['Funhouse', 'Twister', 'Corkscrew', 'Tubes'],
+  }),
+  skyway: style({
     minDepth: 2,
     len: [6, 9],
-    width: 0.2,
-    specialChance: 0.2,
-    specials: { plaza: 3, split: 1.5 },
-    features: { bumpers: 4 },
-    featureChance: 0.15,
-    diag: 0.35,
-    nouns: ['Pinball', 'Arcade', 'Ricochet', 'Rebound'],
+    specialChance: 0.4,
+    maxSpecials: 1,
+    specials: { drop: 2.5, leap: 2, jump: 1, climb: 1 },
+    featureChance: -0.15,
+    round: 0.1,
+    nouns: ['Skyway', 'Ledges', 'Cascade', 'Tiers'],
   }),
 };
 export const ARCHETYPES = Object.keys(ARCH) as Archetype[];
 
 /**
- * The personality of a stage's hole. Stages walk a per-run shuffled deck (three steps at a
+ * The personality of a stage's hole. Stages walk a per-run shuffled deck (four steps at a
  * time, so neighbouring stages and the options of one route vote never share an archetype).
  */
 export function holeArchetype(seed: number, index: number, spec: StageSpec): Archetype {
@@ -348,24 +424,32 @@ export function holeArchetype(seed: number, index: number, spec: StageSpec): Arc
     const j = Math.floor(r() * (i + 1));
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
-  const a = deck[(index * 3 + spec.variant) % deck.length];
+  // 4 is coprime with the deck size, so every route option walks the whole deck.
+  const a = deck[(index * 4 + spec.variant) % deck.length];
   return spec.depth >= ARCH[a].minDepth ? a : 'classic';
 }
 
 /** Every boss has a set piece from its planet and leans on its planet's heaviest machinery. */
 const BOSS_SPECIAL: Record<string, Special> = {
   meadow: 'stream',
-  candy: 'plaza',
+  candy: 'loop',
   frozen: 'lake',
   clockwork: 'fork',
   space: 'jump',
 };
 const BOSS_HEAVY: Record<string, Feature[]> = {
-  meadow: ['windmill', 'spinner', 'bumpers'],
+  meadow: ['windmill', 'spinner', 'mover'],
   candy: ['spinner', 'mover', 'sticky'],
   frozen: ['windmill', 'ice', 'spinner'],
   clockwork: ['gate', 'mover', 'windmill', 'conveyor'],
   space: ['spinner', 'gate', 'windmill'],
+};
+const TOWER: Record<string, string> = {
+  meadow: '#8a6a4a',
+  candy: '#f3a6c4',
+  frozen: '#bcdcec',
+  clockwork: '#b08d57',
+  space: '#6d6a99',
 };
 const BRIDGE: Record<string, string> = {
   meadow: '#a0703f',
@@ -407,17 +491,26 @@ function planFork(
   const a = pick(r, safe);
   const b = pick(r, risky);
   const lanes: [LaneKind, LaneKind] = r() < 0.5 ? [a, b] : [b, a];
-  const widths = lanes.map((k) =>
-    k === 'bridge' ? Math.max(1.0, W * 0.45) : k === 'pinball' ? W + 0.3 : W,
-  ) as [number, number];
-  const minLane = lanes.includes('jump') || lanes.includes('hill') ? 10.4 : 9;
-  const m = Math.round(Math.max(range(r, 13, 16 + depth / 6), W + minLane));
-  // A wide lagoon between the lanes; the steady lane swings out further (it's the long way round).
-  const base = Math.max(...widths) / 2 + range(r, 3, 4.2);
-  const wider = range(r, 0.4, 1.8);
+  // The lanes swoop apart round a wide lagoon, run side by side, then swoop back together.
+  // The steady lane swings out further (it's the long way round).
+  const base = W / 2 + range(r, 2.4, 3.4);
+  const wider = range(r, 0.5, 1.6);
   const hs = lanes.map((k) => base + (SAFE_LANES.includes(k) ? wider : 0)) as [number, number];
-  return { m, hs, rin: first ? 2.4 : 1.6, rout: last ? 3.4 : W / 2 + 1.5, lanes, widths };
+  const sweep = Math.min(7, Math.max(4.5, 1.25 * Math.max(...hs)));
+  const straight = range(r, 8.5, 10.5 + depth / 5) + (lanes.includes('jump') || lanes.includes('hill') ? 1.5 : 0);
+  const m = Math.round(straight + 2 * sweep);
+  return { m, sweep, hs, rin: first ? 2.6 : 3.2, rout: last ? 3.6 : 3.2, lanes };
 }
+
+/** Lateral offset of a fork lane `s` metres after the split (smooth swoop out and back in). */
+function forkLat(F: ForkPlan, k: number, s: number): number {
+  const h = F.hs[k];
+  const e = s < F.sweep ? s / F.sweep : s > F.m - F.sweep ? (F.m - s) / F.sweep : 1;
+  return (h * (1 - Math.cos(Math.PI * Math.max(0, Math.min(1, e))))) / 2;
+}
+
+/** Set pieces of the most recently generated hole (for tests and tooling). */
+export let lastHoleSpecials: string[] = [];
 
 function golfHole(seed: number, index: number, spec: StageSpec) {
   const r = rng(hashString(`hop:${seed}:${index}:${spec.variant}`));
@@ -458,7 +551,18 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     addW('jump', 0.8);
     addW('lake', 0.5);
   }
-  if (depth >= 4) addW('plaza', 0.5);
+  if (depth >= 1) {
+    addW('drop', 0.7);
+    addW('slide', 0.6);
+  }
+  if (depth >= 2) {
+    addW('spiral', 0.5);
+    addW('loop', 0.5);
+  }
+  if (depth >= 4) {
+    addW('plaza', 0.3);
+    addW('leap', 0.5);
+  }
   if (depth >= 8) {
     addW('jump', 0.4);
     addW('split', 0.3);
@@ -475,8 +579,11 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
 
   const usedSpecials: Special[] = [];
   const legs: Leg[] = [];
-  /** Footprints of placed legs (centre segment + half width) so later legs keep clear. */
-  const feet: { a: Vec3; b: Vec3; half: number; leg: number }[] = [];
+  /**
+   * Footprints of placed legs (centre segment + half width) so later legs keep clear. A strict
+   * footprint (a spiral tower) is kept clear even of the neighbouring legs.
+   */
+  const feet: { a: Vec3; b: Vec3; half: number; leg: number; strict?: boolean }[] = [];
   const segDist = (p: Vec3, a: Vec3, b: Vec3) => {
     const abx = b[0] - a[0],
       abz = b[2] - a[2];
@@ -504,9 +611,17 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           );
       }
       const fork = special === 'fork' ? planFork(r, W, depth, socks, i === 0, last) : undefined;
+      let spiral: SpiralPlan | undefined;
+      if (special === 'spiral') {
+        const R = W / 2 + range(r, 1.0, 1.4);
+        spiral = { side: r() < 0.5 ? 1 : -1, R, lead: R + W / 2 + 1.0 };
+      }
+      const amp = special === 'slide' ? range(r, 0.5, 1.1) * (r() < 0.5 ? 1 : -1) : 0;
+      const spring = special === 'leap' && r() < 0.5;
       let len = Math.round(range(r, st.len[0], st.len[1] + t * 2));
-      if (fork) len = Math.ceil(fork.rin + fork.m + W + fork.rout);
-      else if (special && special !== 'fork')
+      if (fork) len = Math.ceil(fork.rin + fork.m + fork.rout);
+      else if (spiral) len = Math.ceil(spiral.lead + 3.5 + W / 2 + (last ? 2.5 : 0) + range(r, 0, 1.5));
+      else if (special && special !== 'fork' && special !== 'spiral')
         len = Math.max(len, Math.ceil(SPECIAL_LEN[special] + (last ? 2 : 0) + range(r, 0, 1.5)));
       const up = arch === 'summit' ? 0.8 : 0.55;
       const sgn = r() < up ? 1 : -1;
@@ -515,7 +630,17 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           ? sgn * (t > 0.5 && r() < 0.5 ? 0.9 : 0.5)
           : special === 'climb'
             ? sgn * (t > 0.4 ? 1.3 : 1.0)
-            : 0;
+            : special === 'spiral'
+              ? -range(r, 1.6, 2.0)
+              : special === 'slide'
+                ? -range(r, 1.2, 1.7 + 0.4 * t)
+                : special === 'drop'
+                  ? -range(r, 0.7, 1.1)
+                  : special === 'leap'
+                    ? spring
+                      ? range(r, 0.8, 1.1)
+                      : range(r, 0.3, 0.45)
+                    : 0;
       const diag = i > 0 && !fork && r() < st.diag;
       const quarter = diag ? Math.PI / 4 : Math.PI / 2;
       const turns = i === 0 || fork ? [0] : r() < 0.5 ? [quarter, -quarter, 0] : [-quarter, quarter, 0];
@@ -526,20 +651,24 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
             ? plazaW / 2
             : special === 'split'
               ? splitW / 2
-              : W / 2;
+              : W / 2 + Math.abs(amp);
       for (const turn of turns) {
         const d = dir + turn;
         const ux = Math.cos(d),
           uz = Math.sin(d);
         const b: Vec3 = [cur[0] + ux * len, cur[1] + dy, cur[2] + uz * len];
-        const mine: { a: Vec3; b: Vec3; half: number }[] = [{ a: cur, b, half }];
-        if (fork) {
-          const p = (s: number): Vec3 => [cur[0] + ux * s, cur[1], cur[2] + uz * s];
+        const mine: { a: Vec3; b: Vec3; half: number; strict?: boolean }[] = [{ a: cur, b, half }];
+        const p = (s: number): Vec3 => [cur[0] + ux * s, cur[1], cur[2] + uz * s];
+        if (fork)
           mine.push({
             a: p(fork.rin + 0.5),
-            b: p(fork.rin + fork.m + W - 0.5),
+            b: p(fork.rin + fork.m - 0.5),
             half: Math.max(...fork.hs) + W / 2 + WALL_T,
           });
+        if (spiral) {
+          const c = p(spiral.lead);
+          const C: Vec3 = [c[0] - uz * spiral.side * spiral.R, c[1], c[2] + ux * spiral.side * spiral.R];
+          mine.push({ a: C, b: C, half: spiral.R + W / 2 + WALL_T, strict: true });
         }
         let clash = false;
         for (const m of mine) {
@@ -548,8 +677,9 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           for (let k = 0; k <= n && !clash; k++) {
             const q: Vec3 = [m.a[0] + ((m.b[0] - m.a[0]) * k) / n, 0, m.a[2] + ((m.b[2] - m.a[2]) * k) / n];
             for (const f of feet) {
-              if (f.leg === i - 1) continue;
-              if (segDist(q, f.a, f.b) < f.half + m.half + 0.9) {
+              if (f.leg === i - 1 && !f.strict && !m.strict) continue;
+              if (f.leg === i) continue;
+              if (segDist(q, f.a, f.b) < f.half + m.half + (f.strict || m.strict ? 0.3 : 0.9)) {
                 clash = true;
                 break;
               }
@@ -558,7 +688,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         }
         if (clash) continue;
         for (const m of mine) feet.push({ ...m, leg: i });
-        legs.push({ a: cur, b, ang: d, len, special, dy, fork });
+        legs.push({ a: cur, b, ang: d, len, special, dy, fork, spiral, amp, spring });
         if (special) usedSpecials.push(special);
         dir = d;
         cur = b;
@@ -580,18 +710,23 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       next = legs[i];
     const th = norm(next.ang - prev.ang);
     if (Math.abs(th) < 1e-3) continue;
-    if (prev.fork || next.fork || r() > 0.25 + 0.45 * (1 - t) + st.round + (Math.abs(th) < 1 ? 0.3 : 0)) {
+    // Most corners sweep round in a curve: the course should flow.
+    if (r() > 0.82 + st.round + (Math.abs(th) < 1 ? 0.2 : 0)) {
       sharp++;
       continue;
     }
     const tanH = Math.tan(Math.abs(th) / 2);
-    const R0 = Math.abs(th) > 1 ? range(r, 1.6, 2.8) : range(r, 2.5, 4.5);
+    const R0 = Math.abs(th) > 1 ? range(r, 2.4, 4.2) : range(r, 3.5, 6);
     // Never eat into the room a special needs (a ramp must keep its gentle slope).
-    const room = (leg: Leg, k: number) =>
-      leg.special && leg.special !== 'fork'
-        ? Math.max(0, (leg.len - SPECIAL_LEN[leg.special] - (k === legs.length - 1 ? 2.5 : 0)) / 2)
-        : leg.len * 0.28;
-    const d = Math.min(R0 * tanH, prev.len * 0.28, next.len * 0.28, room(prev, i - 1), room(next, i));
+    const room = (leg: Leg, k: number, atStart: boolean) => {
+      const tail = k === legs.length - 1 ? 2.5 : 0;
+      if (leg.fork) return (atStart ? leg.fork.rin : leg.fork.rout) - 0.6;
+      if (leg.spiral) return atStart ? 0.6 : Math.max(0, leg.len - leg.spiral.lead - 3.5 - W / 2 - tail);
+      if (leg.special && leg.special !== 'fork' && leg.special !== 'spiral')
+        return Math.max(0, (leg.len - SPECIAL_LEN[leg.special] - tail) / 2);
+      return leg.len * 0.42;
+    };
+    const d = Math.min(R0 * tanH, room(prev, i - 1, false), room(next, i, true));
     const R = d / tanH;
     if (R < 1.3) {
       sharp++;
@@ -616,9 +751,14 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
   // ---- 3. Centreline points, segment tags, and specials laid out inside each leg.
   const pts: Vec3[] = [];
   const tags: SegTag[] = [];
+  /** Per segment: which side has no rail because a tower stands there (+1 left, -1 right). */
+  const towerSide: number[] = [];
   const pathPts: Vec3[] = [];
-  const push = (p: Vec3, tag: SegTag, pathOverride?: Vec3[]) => {
-    if (pts.length) tags.push(tag);
+  const push = (p: Vec3, tag: SegTag, pathOverride?: Vec3[], tower = 0) => {
+    if (pts.length) {
+      tags.push(tag);
+      towerSide.push(tower);
+    }
     pts.push(p);
     if (pathOverride) pathPts.push(...pathOverride);
     pathPts.push(p);
@@ -658,8 +798,9 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     const lastLeg = i === legs.length - 1;
     const tail = lastLeg ? 2.5 : 0; // keep the approach to the cup clean
     let sp = L.special;
-    if (sp && sp !== 'fork' && Lp < SPECIAL_LEN[sp] + tail - 0.5) sp = L.dy && Lp >= 5 ? 'ramp' : null;
-    if (L.dy && sp !== 'ramp' && sp !== 'climb') sp = 'ramp';
+    if (sp && sp !== 'fork' && sp !== 'spiral' && Lp < SPECIAL_LEN[sp] + tail - 0.5)
+      sp = L.dy && Lp >= 5 ? 'ramp' : null;
+    if (L.dy && !(sp && ELEVATION.includes(sp))) sp = 'ramp';
     switch (sp) {
       case 'ramp': {
         const land = 1.5;
@@ -745,6 +886,194 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         );
         difficulty += SPECIAL_DIFF.jump;
         tips.push('Jump! Hit the kicker ramp hard enough to clear the gap.');
+        break;
+      }
+      case 'spiral': {
+        // A corkscrew: one full turn round a tower, down to a lower tier.
+        const P = L.spiral!;
+        const D = -L.dy;
+        const lead = P.lead - trimIn[i];
+        push(at(lead, y0), 'lead');
+        const N = 40;
+        for (let k = 1; k <= N; k++) {
+          const phi = (Math.PI * 2 * k) / N;
+          push(
+            atL(lead + P.R * Math.sin(phi), P.side * P.R * (1 - Math.cos(phi)), y0 - (D * k) / N),
+            'spiral',
+            undefined,
+            P.side,
+          );
+        }
+        push(E, 'landing');
+        const C = atL(lead, P.side * P.R);
+        const top = y0 + 1.7,
+          bottom = y0 - D - 3;
+        const dia = 2 * (P.R - W / 2) - 0.04;
+        extraSolids.push({
+          shape: 'cylinder',
+          role: 'block',
+          center: [C[0], (top + bottom) / 2, C[2]],
+          size: [dia, top - bottom, dia],
+          rot: [0, 0, 0],
+          surface: 'grass',
+          color: TOWER[world] ?? TOWER.meadow,
+        });
+        decorList.push(decor(ISLET[world] ?? 'rock', C[0], top, C[2], Math.min(1.2, dia * 0.45), r() * 6));
+        for (const phi of [Math.PI / 2, Math.PI, (Math.PI * 3) / 2]) {
+          const c = atL(lead + P.R * Math.sin(phi), P.side * P.R * (1 - Math.cos(phi)), y0 - (D * phi) / (Math.PI * 2));
+          collectibles.push(item(holeId, 'coin', c[0], c[1], c[2]));
+        }
+        difficulty += SPECIAL_DIFF.spiral;
+        tips.push('Corkscrew! Roll into the spiral and let it carry you down.');
+        break;
+      }
+      case 'slide': {
+        // A twisting chute down to a lower tier.
+        const D = -L.dy;
+        const A = L.amp ?? 0.8;
+        const lead = 1.4;
+        const run = Lp - lead - 2.4 - tail;
+        const n = Math.max(10, Math.ceil(run / 0.65));
+        push(at(lead, y0), 'landing');
+        for (let k = 1; k <= n; k++) {
+          const sk = (run * k) / n;
+          push(
+            atL(lead + sk, A * Math.sin((Math.PI * 2 * sk) / run), y0 - (D * (1 - Math.cos((Math.PI * sk) / run))) / 2),
+            'slide',
+          );
+        }
+        push(E, 'landing');
+        for (const f of [0.25, 0.5, 0.75]) {
+          const c = atL(lead + run * f, A * Math.sin(Math.PI * 2 * f), y0 - (D * (1 - Math.cos(Math.PI * f))) / 2);
+          collectibles.push(item(holeId, 'coin', c[0], c[1], c[2]));
+        }
+        difficulty += SPECIAL_DIFF.slide;
+        tips.push('A twisting slide: it picks up speed on the way down.');
+        break;
+      }
+      case 'drop': {
+        // Ledges: roll off the edge onto the green below (sometimes two steps).
+        const D = -L.dy;
+        const steps = D > 0.85 && Lp - tail >= 9.5 && r() < 0.5 ? 2 : 1;
+        const fall = 0.9;
+        let a = 2.4;
+        let y = y0;
+        for (let k = 0; k < steps; k++) {
+          const lo = y - D / steps;
+          push(at(a, y), k === 0 ? 'landing' : 'landing');
+          push(at(a + fall, lo), 'drop');
+          // The lower green tucks back under the ledge so a slow ball can't fall between them.
+          extraSolids.push(beam(at(a - 0.3, lo), at(a + fall, lo), W, FLOOR_T, 'floor'));
+          const c = at(a + fall / 2, y - D / steps / 2 + 0.25);
+          collectibles.push(item(holeId, 'coin', c[0], c[1], c[2]));
+          a += fall + 2;
+          y = lo;
+        }
+        push(E, Lp - a > 5 ? 'flat' : 'landing');
+        difficulty += SPECIAL_DIFF.drop;
+        tips.push('Over the ledge: the ball drops to the green below and keeps rolling.');
+        break;
+      }
+      case 'leap': {
+        if (L.spring) {
+          // A spring pad pops the ball up onto a ledge a metre higher across the water. Too soft
+          // and it drops short; too hard and it smacks into the ledge's face.
+          const gap = range(r, 1.3, 1.6 + 0.4 * t);
+          const pad = 1.0;
+          const landLen = Math.max(4, 4 + tail);
+          const runIn = Math.max(2.5, Lp - pad - gap - landLen);
+          const K0 = at(runIn + pad, y0);
+          const G = at(runIn + pad + gap, E[1]);
+          push(at(Math.max(1, runIn - 1.5), y0), 'flat');
+          push(K0, 'landing');
+          push(G, 'gap');
+          push(E, 'landing');
+          const pc = at(runIn + pad / 2, y0);
+          zones.push(zone('spring', pc[0], pc[2], pad, W - 0.2, y0, { strength: 5.6, ...rot }));
+          const gm: Vec3 = [(K0[0] + G[0]) / 2, y0, (K0[2] + G[2]) / 2];
+          zones.push(zone('water', gm[0], gm[2], gap + 0.3, W + 3, y0, rot));
+          collectibles.push(
+            ...coinLine(
+              holeId,
+              [K0[0] + ux * gap * 0.25, y0 + 1.45, K0[2] + uz * gap * 0.25],
+              [K0[0] + ux * gap * 0.7, y0 + 1.5, K0[2] + uz * gap * 0.7],
+              2,
+            ),
+          );
+          difficulty += SPECIAL_DIFF.leap;
+          tips.push('Spring pad! Roll onto it at a steady pace to bounce up to the ledge.');
+          break;
+        }
+        // A kicker launches the ball up onto a higher ledge across water.
+        const gap = range(r, 1.2, 1.5 + 0.5 * t);
+        const kick = 2.2;
+        const landLen = Math.max(4, 4 + tail);
+        const runIn = Math.max(2.5, Lp - kick - gap - landLen);
+        const K0 = at(runIn, y0);
+        const K1 = at(runIn + kick, y0 + 0.6);
+        const G = at(runIn + kick + gap, E[1]);
+        push(K0, 'flat');
+        push(K1, 'kicker');
+        push(G, 'gap');
+        push(E, 'landing');
+        const gm: Vec3 = [(K1[0] + G[0]) / 2, y0, (K1[2] + G[2]) / 2];
+        zones.push(zone('water', gm[0], gm[2], gap + 0.3, W + 3, y0, rot));
+        if (world === 'space')
+          zones.push(zone('lowGravity', gm[0], gm[2], gap + 2, W + 1, y0, { strength: 0.6, h: 3, rotY: -L.ang }));
+        if (depth < 6 || r() < 0.5)
+          zones.push(
+            zone('boost', K0[0] - ux * 1, K0[2] - uz * 1, 1.2, W * 0.8, y0, { dir: L.ang, strength: 9, ...rot }),
+          );
+        collectibles.push(
+          ...coinLine(
+            holeId,
+            [K1[0] + ux * gap * 0.3, y0 + 0.9, K1[2] + uz * gap * 0.3],
+            [K1[0] + ux * gap * 0.75, y0 + 0.85, K1[2] + uz * gap * 0.75],
+            2,
+          ),
+        );
+        if (r() < 0.5) {
+          const g = at(runIn + kick + gap + 1.6, E[1]);
+          collectibles.push(item(holeId, 'gem', g[0], g[1], g[2]));
+        }
+        difficulty += SPECIAL_DIFF.leap;
+        tips.push('Leap up to the ledge: too soft and you splash, too hard and you overshoot.');
+        break;
+      }
+      case 'loop': {
+        // Loop-the-loop: a funnel steers into the entry lane; the loop drops you in the exit lane.
+        const sg = r() < 0.5 ? 1 : -1;
+        const q = (W + WALL_T) / 4;
+        const R = range(r, 1.1, 1.25 + 0.2 * t);
+        const aF = 1.0;
+        const aP = aF + 3.6;
+        const stop = aP + R + 0.35;
+        push(at(aF, y0), 'landing');
+        push(at(stop + 0.6, y0), 'loop', [atL(aP - 1.4, -sg * q), atL(aP - 0.2, -sg * q), atL(aP + 0.3, sg * q)]);
+        push(E, Lp - stop - 0.6 > 5 ? 'flat' : 'landing');
+        extraSolids.push(
+          wall(atL(aF + 0.4, sg * (W / 2)), atL(aP - 0.9, 0)),
+          wall(atL(aP - 0.9, 0), atL(stop, 0)),
+          wall(atL(stop, 0), atL(stop, -sg * (W / 2 + WALL_T / 2))),
+        );
+        obstacles.push({
+          type: 'loop',
+          id: `lp${i}`,
+          pos: atL(aP, -sg * q, y0),
+          rotY: L.ang,
+          radius: R,
+          width: Math.max(0.8, 2 * q - 0.25),
+          shift: sg * 2 * q,
+          segments: 28,
+          phase: 0,
+        });
+        if (depth < 5 || r() < 0.4) {
+          const b = atL(aP - 2.0, -sg * q);
+          zones.push(zone('boost', b[0], b[2], 1.0, 2 * q - 0.3, y0, { dir: L.ang, strength: 9.5, ...rot }));
+        }
+        collectibles.push(...coinLine(holeId, atL(stop + 0.4, sg * q), atL(stop + 1.8, sg * q), 2));
+        difficulty += SPECIAL_DIFF.loop;
+        tips.push('Loop-the-loop! Line up with the entry lane and give it plenty of pace.');
         break;
       }
       case 'stream': {
@@ -892,32 +1221,27 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           );
           difficulty += SPECIAL_DIFF.lake;
         } else {
-          // Pinball plaza: a staggered field of bumpers.
-          const rows = Math.max(2, Math.floor((segLen - 1.6) / 1.6));
-          for (let k = 0; k < rows; k++) {
-            const along = 1.4 + 0.8 + (k + 0.5) * ((segLen - 1.6) / rows);
-            const lanes = k % 2 ? [-0.5, 0.5] : [-0.75, 0, 0.75];
-            for (const q of lanes) {
-              const jitter = (r() - 0.5) * 0.25;
-              const p = at(along, y0);
-              obstacles.push({
-                type: 'bumper',
-                id: `pz${i}-${k}-${q}`,
-                pos: [
-                  p[0] + nx * (q * (wide / 2 - 0.5) + jitter),
-                  y0,
-                  p[2] + nz * (q * (wide / 2 - 0.5) + jitter),
-                ],
-                radius: 0.28,
-                height: 0.4,
-                strength: 1,
-                phase: 0,
-              });
-            }
+          // A wide green with a boulder in the middle and a couple of well-spaced bumpers.
+          extraSolids.push(pillar(mid[0], mid[2], 1.1, y0, 0.7));
+          const sg = r() < 0.5 ? 1 : -1;
+          for (const [f, l] of [
+            [0.22, sg],
+            [0.78, -sg],
+          ] as const) {
+            const p = atL(1.4 + segLen * f, l * (wide / 2 - 0.75));
+            obstacles.push({
+              type: 'bumper',
+              id: `pz${i}-${f}`,
+              pos: p,
+              radius: 0.3,
+              height: 0.4,
+              strength: 1,
+              phase: 0,
+            });
           }
-          collectibles.push(...coinLine(holeId, at(2.4, y0), at(1.4 + segLen - 0.8, y0), 3));
+          collectibles.push(...coinLine(holeId, atL(2.6, -sg * 0.8), atL(1.4 + segLen - 1.2, -sg * 0.8), 3));
           difficulty += SPECIAL_DIFF.plaza;
-          tips.push('Pinball plaza! Bumpers everywhere: bank it through.');
+          tips.push('A wide green with a boulder in the middle: bank it round either side.');
         }
         break;
       }
@@ -931,69 +1255,81 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     }
 
     /**
-     * Forked fairway: a ring round a lagoon. Two lanes several metres apart, each with its own
-     * character (one steady, one quick but risky), rejoin before the hole carries on.
+     * Forked fairway: the lanes swoop apart round a lagoon, run side by side (one steady, one
+     * quick but risky), then swoop back together before the hole carries on.
      */
     function buildFork(F: ForkPlan) {
-      const ring = F.m + W;
-      const a0 = F.rin + W,
-        a1 = F.rin + F.m;
-      const [wA, wB] = F.widths;
-      const [hA, hB] = F.hs;
-      const hi = hA + wA / 2,
-        lo = -(hB + wB / 2);
-      const iL = hA - wA / 2,
-        iR = -(hB - wB / 2);
-      const wt = WALL_T;
-      // Cross-bars where the lanes split and rejoin.
-      for (const c of [F.rin + W / 2, a1 + W / 2])
-        extraSolids.push(beam(atL(c, lo), atL(c, hi), W, FLOOR_T, 'floor'));
-      for (const aw of [F.rin - wt / 2, F.rin + ring + wt / 2])
-        extraSolids.push(wall(atL(aw, lo - wt), atL(aw, -W / 2)), wall(atL(aw, W / 2), atL(aw, hi + wt)));
-      for (const [c0, c1] of [
-        [F.rin - wt, a0],
-        [a1, F.rin + ring + wt],
-      ])
-        extraSolids.push(
-          wall(atL(c0, hi + wt / 2), atL(c1, hi + wt / 2)),
-          wall(atL(c0, lo - wt / 2), atL(c1, lo - wt / 2)),
-        );
-      // The island: a lagoon with a little islet.
-      extraSolids.push(
-        wall(atL(a0 + wt / 2, iR), atL(a0 + wt / 2, iL)),
-        wall(atL(a1 - wt / 2, iR), atL(a1 - wt / 2, iL)),
-      );
-      const ic = atL((a0 + a1) / 2, (iL + iR) / 2);
-      zones.push(zone('water', ic[0], ic[2], a1 - a0, iL - iR, y0, rot));
+      const off0 = F.rin - trimIn[i];
+      const a0 = off0 + F.sweep,
+        a1 = off0 + F.m - F.sweep;
+      const lat = (k: number, a: number) => forkLat(F, k, a - off0);
+      /** Gap between the lanes' inner edges `a` along the leg (negative where they overlap). */
+      const gapAt = (a: number) => lat(0, a) + lat(1, a) - W;
+      // Where the lanes stop sharing a floor (and meet again): the island's tips.
+      const crossing = (lo: number, hi: number) => {
+        let x = lo,
+          y = hi;
+        const rising = gapAt(hi) > gapAt(lo);
+        for (let k = 0; k < 40; k++) {
+          const mid = (x + y) / 2;
+          if (gapAt(mid) < 0 === rising) x = mid;
+          else y = mid;
+        }
+        return (x + y) / 2;
+      };
+      const tips = [crossing(off0, a0), crossing(a1, off0 + F.m)];
+      const nS = Math.max(7, Math.ceil(F.sweep / 0.55));
+      const sweepIn: number[] = [];
+      const sweepOut: number[] = [];
+      for (let j = 0; j <= nS; j++) {
+        sweepIn.push(off0 + (F.sweep * j) / nS);
+        sweepOut.push(a1 + (F.sweep * j) / nS);
+      }
+      for (const [list, c] of [
+        [sweepIn, tips[0]],
+        [sweepOut, tips[1]],
+      ] as const) {
+        if (list.every((v) => Math.abs(v - c) > 0.08)) list.push(c);
+        list.sort((x, y) => x - y);
+      }
+      const nIn = sweepIn.length - 1;
+      // Rocks round off the tips of the island.
+      for (const sc of tips) {
+        const c = atL(sc, (lat(0, sc) - lat(1, sc)) / 2);
+        extraSolids.push(pillar(c[0], c[2], 0.5, y0, 0.45));
+      }
+      const hA = F.hs[0],
+        hB = F.hs[1];
+      const lagoonW = hA + hB - W - 2 * WALL_T - 0.1;
+      const ic = atL((a0 + a1) / 2, (hA - hB) / 2);
+      zones.push(zone('water', ic[0], ic[2], a1 - a0 + 1.2, lagoonW, y0, rot));
       decorList.push(decor(ISLET[world] ?? 'rock', ic[0], y0 - 0.35, ic[2], 0.9, r() * 6));
+      if (a1 - a0 > 9)
+        decorList.push(
+          decor(ISLET[world] ?? 'rock', ...(atL(a0 + 1.5, (hA - hB) / 2 + 0.6, y0 - 0.4) as [number, number, number]), 0.55, r() * 6),
+        );
 
       const lanePaths: Vec3[][] = [];
-      ([1, -1] as const).forEach((side, k) =>
-        lanePaths.push(buildLane(F.lanes[k], side, F.widths[k], F.hs[k])),
-      );
+      ([1, -1] as const).forEach((side, k) => lanePaths.push(buildLane(F.lanes[k], side, k)));
       const safeK = SAFE_LANES.includes(F.lanes[0]) ? 0 : 1;
-      const ps = (safeK === 0 ? 1 : -1) * F.hs[safeK];
-      push(at(F.rin, y0), 'flat');
-      push(at(F.rin + ring, y0), 'fork', [
-        atL(F.rin + W / 2, 0),
-        atL(F.rin + W / 2, ps),
-        ...lanePaths[safeK],
-        atL(a1 + W / 2, ps),
-        atL(a1 + W / 2, 0),
-      ]);
+      push(at(off0, y0), 'flat');
+      push(at(off0 + F.m, y0), 'fork', lanePaths[safeK].slice(1, -1));
       push(E, 'landing');
       difficulty += SPECIAL_DIFF.fork;
       leadTip = `The fairway forks round a lagoon: ${LANE_TIP[F.lanes[1 - safeK]]} one way, ${LANE_TIP[F.lanes[safeK]]} the other. Pick your route!`;
 
-      function buildLane(kind: LaneKind, side: 1 | -1, w: number, h: number): Vec3[] {
+      function buildLane(kind: LaneKind, side: 1 | -1, k: number): Vec3[] {
+        const h = F.hs[k];
+        const w = W;
         const LP = (a: number, y = y0, l = 0): Vec3 => atL(a, side * h + l, y);
         const ll = a1 - a0;
         const am = (a0 + a1) / 2;
         const openL: number[] = [];
         const openR: number[] = [];
         const noF: number[] = [];
-        const openOuter = (s: number) => (side === 1 ? openL : openR).push(s);
-        const openInner = (s: number) => (side === 1 ? openR : openL).push(s);
+        // Indices below are segments of the straight middle part; the swoop in comes first.
+        const openOuter = (s: number) => (side === 1 ? openL : openR).push(s + nIn);
+        const openInner = (s: number) => (side === 1 ? openR : openL).push(s + nIn);
         const outerWater = (from: number, to: number) => {
           const c = LP((from + to) / 2, y0, side * (w / 2 + 1.1));
           zones.push(zone('water', c[0], c[2], to - from + 0.4, 2, y0, rot));
@@ -1017,26 +1353,26 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
             coins(a0 + 1, a0 + 2.2, 2);
             break;
           case 'slalom':
-            [0.28, 0.5, 0.72].forEach((f, k) => {
-              const c = LP(a0 + ll * f, y0, (k % 2 ? -1 : 1) * w * 0.24);
+            [0.25, 0.5, 0.75].forEach((f, j) => {
+              const c = LP(a0 + ll * f, y0, (j % 2 ? -1 : 1) * w * 0.24);
               extraSolids.push(pillar(c[0], c[2], 0.42, y0, 0.6));
             });
-            coins(a0 + ll * 0.38, a0 + ll * 0.62, 2, 0);
+            coins(a0 + ll * 0.36, a0 + ll * 0.64, 2, 0);
             break;
-          case 'pinball':
-            [0.22, 0.42, 0.62, 0.82].forEach((f, k) => {
-              const c = LP(a0 + ll * f, y0, (k % 2 ? -1 : 1) * w * 0.22);
+          case 'bumpers':
+            [0.3, 0.7].forEach((f, j) => {
+              const c = LP(a0 + ll * f, y0, (j % 2 ? -1 : 1) * w * 0.24);
               obstacles.push({
                 type: 'bumper',
-                id: `fk${i}${side}${k}`,
+                id: `fk${i}${side}${j}`,
                 pos: c,
-                radius: 0.28,
+                radius: 0.3,
                 height: 0.4,
                 strength: 1,
                 phase: 0,
               });
             });
-            coins(a0 + ll * 0.3, a0 + ll * 0.55, 2, 0);
+            coins(a0 + ll * 0.42, a0 + ll * 0.58, 2, 0);
             break;
           case 'hill': {
             const hh = t > 0.5 ? 0.8 : 0.65;
@@ -1053,14 +1389,20 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
             collectibles.push(item(holeId, 'coin', top[0], y0 + hh, top[2]));
             break;
           }
-          case 'bridge':
-            lp = [LP(a0), LP(a0 + 1.6), LP(a1 - 1.6), LP(a1)];
+          case 'bridge': {
+            // A narrow plank over the water.
+            lp = [LP(a0), LP(a0 + 1.4), LP(a1 - 1.4), LP(a1)];
+            noF.push(1 + nIn);
             openOuter(1);
             openInner(1);
-            outerWater(a0 + 1.6, a1 - 1.6);
+            const bw = Math.max(0.8, w * 0.42);
+            extraSolids.push(beam(LP(a0 + 1.4), LP(a1 - 1.4), bw, FLOOR_T, 'floor', 'grass', 0, bridgeColor));
+            const c = LP(am, y0, side * 0.6);
+            zones.push(zone('water', c[0], c[2], ll - 2.8 + 0.2, w + 2.4, y0, rot));
             gem(am);
-            coins(a0 + 2.2, am - 1, 2);
+            coins(a0 + 2, am - 1, 2);
             break;
+          }
           case 'boost': {
             lp = [LP(a0), LP(a0 + 2.4), LP(a1 - 1.4), LP(a1)];
             openOuter(1);
@@ -1089,9 +1431,9 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
               k1 = k0 + 2,
               g1 = k1 + gap;
             lp = [LP(a0), LP(k0), LP(k1, y0 + 0.45), LP(g1), LP(a1)];
-            noF.push(2);
-            openL.push(2);
-            openR.push(2);
+            noF.push(2 + nIn);
+            openL.push(2 + nIn);
+            openR.push(2 + nIn);
             const c = LP((k1 + g1) / 2);
             zones.push(zone('water', c[0], c[2], gap + 0.3, w + 3, y0, rot));
             const b = LP(k0 - 1.2);
@@ -1104,7 +1446,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           }
           case 'machine': {
             const c = LP(am);
-            if (depth >= 5 && w >= 2)
+            if (depth >= 5)
               obstacles.push({
                 type: 'windmill',
                 id: `fw${i}${side}`,
@@ -1135,8 +1477,15 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
             break;
           }
         }
+        const inPts = sweepIn.slice(0, -1).map((a) => atL(a, side * lat(k, a), y0));
+        const outPts = sweepOut.slice(1).map((a) => atL(a, side * lat(k, a), y0));
+        const full = [...inPts, ...lp, ...outPts];
+        // Inner rails only where the lanes have parted (they share one floor near the ends).
+        const along = [...sweepIn.slice(0, -1), ...lp.map(() => (a0 + a1) / 2), ...sweepOut.slice(1)];
+        for (let j = 0; j < full.length - 1; j++)
+          if (Math.min(gapAt(along[j]), gapAt(along[j + 1])) < -0.02) (side === 1 ? openR : openL).push(j);
         extraSolids.push(
-          ...fairway(lp, {
+          ...fairway(full, {
             width: w,
             openStart: true,
             openEnd: true,
@@ -1145,7 +1494,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
             noFloor: noF,
           }),
         );
-        return lp;
+        return full;
       }
     }
 
@@ -1190,6 +1539,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     if (Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]) < 1e-3) {
       pts.splice(i, 1);
       tags.splice(i - 1, 1);
+      towerSide.splice(i - 1, 1);
     }
   for (let i = pathPts.length - 1; i > 0; i--)
     if (
@@ -1205,13 +1555,25 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
   const openLeft: number[] = [];
   const openRight: number[] = [];
   const noFloor: number[] = [];
+  const noSkirt: number[] = [];
+  const wallHs: Record<number, number> = {};
   const widths: Record<number, number> = {};
   tags.forEach((tg, i) => {
     if (tg === 'gap' || tg === 'stream' || tg === 'fork') {
       noFloor.push(i);
       openLeft.push(i);
       openRight.push(i);
-    } else if (tg === 'split') widths[i] = splitW;
+    } else if (tg === 'drop') noFloor.push(i);
+    else if (tg === 'spiral' || tg === 'lead') {
+      // The corkscrew passes over itself: no earth under it, and the tower is its inner rail.
+      noSkirt.push(i);
+      if (tg === 'spiral') {
+        wallHs[i] = 0.5;
+        (towerSide[i] > 0 ? openLeft : openRight).push(i);
+      }
+    } else if (tg === 'slide') wallHs[i] = 0.5;
+    else if (tg === 'split') widths[i] = splitW;
+    if (tg === 'spiral' || tg === 'slide') noFloor.push(i);
     else if (tg === 'plaza') widths[i] = plazaW;
     else if (tg === 'lake') {
       widths[i] = lakeW;
@@ -1219,9 +1581,9 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     }
   });
 
-  const pool: Feature[] = ['bumpers', 'pillars'];
+  const pool: Feature[] = ['pillars'];
   if (!socks) pool.push('sand');
-  if (depth >= 1) pool.push('boost');
+  if (depth >= 1) pool.push('boost', 'bumpers');
   if (depth >= 2) pool.push('spinner');
   if (depth >= 3) pool.push('mover');
   if ((depth >= 4 || arch === 'waterworks') && socks < 3) pool.push('pools');
@@ -1231,11 +1593,11 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
   if (depth >= 9 && socks < 3) pool.push('pools');
   // Each planet leans on its own signature hazards.
   const flavour: Record<string, Feature[]> = {
-    meadow: ['bumpers', 'pillars'],
+    meadow: socks ? ['pillars'] : ['pillars', 'sand'],
     candy: socks ? ['bumpers'] : ['sticky', 'sticky'],
     frozen: socks < 2 ? ['ice', 'ice'] : ['pillars'],
     clockwork: depth >= 3 ? ['gate', 'mover', 'spinner'] : ['spinner'],
-    space: ['bumpers', 'spinner'],
+    space: ['spinner', 'boost'],
   };
   pool.push(...(flavour[world] ?? []).filter((f) => depth >= 2 || (f !== 'gate' && f !== 'mover')));
   for (const [f, n] of Object.entries(st.features) as [Feature, number][])
@@ -1249,6 +1611,47 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       ? ['windmill', 'spinner', 'mover', 'gate']
       : ['spinner', 'mover', 'bumpers'];
 
+  // Corkscrews and slides get one smooth floor each (no seams to kick the ball at speed).
+  for (let i = 0; i < tags.length; ) {
+    if (tags[i] !== 'spiral' && tags[i] !== 'slide') {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < tags.length && tags[j + 1] === tags[i]) j++;
+    extraSolids.push(ribbon(pts.slice(i, j + 2), W, 'grass', tags[i] !== 'spiral'));
+    i = j + 1;
+  }
+
+  // Tunnels: some sweeping corners, slides and quiet straights get a covered tube.
+  const tunnels: { points: Vec3[]; width: number }[] = [];
+  const tunnelSegs = new Set<number>();
+  const runs: [number, number][] = [];
+  for (let i = 0; i < tags.length; ) {
+    let j = i;
+    if (tags[i] === 'arc' || tags[i] === 'slide') {
+      while (j + 1 < tags.length && tags[j + 1] === tags[i]) j++;
+      if (j > i) runs.push([i, j]);
+    } else if (tags[i] === 'flat' && i > 0 && i < tags.length - 1) {
+      const l = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][2] - pts[i][2]);
+      if (l >= 3 && l <= 7.5) runs.push([i, i]);
+    }
+    i = j + 1;
+  }
+  const tubeBias = arch === 'funhouse' ? 0.25 : 0;
+  for (const [i0, i1] of runs) {
+    if (tunnels.length >= 2) break;
+    const tg = tags[i0];
+    let runLen = 0;
+    for (let k = i0; k <= i1; k++) runLen += Math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][2] - pts[k][2]);
+    if (runLen < 3) continue;
+    const chance = (tg === 'slide' ? 0.5 : tg === 'arc' ? 0.3 : 0.1) + tubeBias;
+    if (r() > chance) continue;
+    tunnels.push({ points: pts.slice(i0, i1 + 2).map((p) => [...p] as Vec3), width: W });
+    for (let k = i0; k <= i1; k++) tunnelSegs.add(k);
+  }
+
+  const BLOCKING: Feature[] = ['bumpers', 'pillars', 'spinner', 'mover', 'gate', 'windmill'];
   const flatSegs = tags.map((tg, i) => i).filter((i) => tags[i] === 'flat');
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i],
@@ -1261,19 +1664,27 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       nz = ux;
     const first = i === 0;
     const lastSeg = i === pts.length - 2;
-    if (tags[i] !== 'flat' || segLen < 4) {
+    if (tags[i] !== 'flat' || segLen < 4 || tunnelSegs.has(i)) {
       continue;
     }
-    const chance = first ? (t > 0.4 ? 0.5 : 0) : boss ? 1 : Math.min(1, 0.45 + 0.5 * t + st.featureChance);
+    const chance = first ? (t > 0.4 ? 0.5 : 0) : boss ? 1 : Math.min(1, 0.4 + 0.45 * t + st.featureChance);
     const twice = t - 0.3 + (arch === 'gauntlet' ? 0.3 : 0) + (boss ? 0.25 : 0);
-    const count = r() < chance ? (segLen > 7 && r() < twice ? 2 : 1) : 0;
+    // Two features only on long stretches, well apart, and never two blockers side by side.
+    const count = r() < chance ? (segLen >= 9 && r() < twice ? 2 : 1) : 0;
     const rot = { rotY: -ang };
+    let prevKind: Feature | null = null;
     for (let k = 0; k < count; k++) {
       const lo = first ? 0.5 : 0.25;
       const hi = lastSeg ? 0.6 : 0.75;
-      const f = count === 1 ? (lo + hi) / 2 : lo + ((hi - lo) * (k + 0.5)) / count;
+      const f = count === 1 ? (lo + hi) / 2 : k === 0 ? 0.28 : 0.72;
       const c: Vec3 = [a[0] + (b[0] - a[0]) * f, a[1], a[2] + (b[2] - a[2]) * f];
-      const kind: Feature = boss && k === 0 && heavy.length ? pick(r, heavy) : pick(r, pool);
+      let kind: Feature | null = boss && k === 0 && heavy.length ? pick(r, heavy) : pick(r, pool);
+      if (prevKind && BLOCKING.includes(prevKind) && BLOCKING.includes(kind)) {
+        const calm = pool.filter((x) => !BLOCKING.includes(x));
+        kind = calm.length ? pick(r, calm) : null;
+      }
+      if (!kind) break;
+      prevKind = kind;
       const id = `${i}-${k}`;
       switch (kind) {
         case 'sand':
@@ -1291,8 +1702,8 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         case 'bumpers': {
           const off = W * 0.25;
           for (const [s, along] of [
-            [1, -0.6],
-            [-1, 0.6],
+            [1, -1.1],
+            [-1, 1.1],
           ] as const)
             obstacles.push({
               type: 'bumper',
@@ -1342,7 +1753,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
             type: 'spinner',
             id: `s${id}`,
             pos: c,
-            length: Math.min(W - 0.3, 2.3),
+            length: Math.min(W - 0.4, 2.2),
             arms: depth >= 8 && r() < 0.5 ? 3 : 2,
             speed: range(r, 0.9, 1.5) * speed * (r() < 0.5 ? 1 : -1),
             height: 0.3,
@@ -1432,7 +1843,11 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       nz = Math.cos(L.ang);
     const wide = L.fork
       ? 2 * Math.max(...L.fork.hs) + W
-      : L.special === 'plaza'
+      : L.spiral
+        ? 2 * (2 * L.spiral.R + W)
+        : L.amp
+          ? W + 2 * Math.abs(L.amp)
+          : L.special === 'plaza'
         ? plazaW
         : L.special === 'split'
           ? splitW
@@ -1488,9 +1903,12 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     }
   }
 
+  lastHoleSpecials = [...legs.map((l) => l.special ?? ''), ...(tunnels.length ? ['tunnel'] : [])].filter(Boolean);
   let length = 0;
   for (let i = 0; i < pts.length - 1; i++)
-    length += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][2] - pts[i][2]);
+    length +=
+      Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][2] - pts[i][2]) *
+      (tags[i] === 'spiral' ? 0.15 : tags[i] === 'slide' ? 0.5 : 1);
   const base = 1.0 + length / 15 + sharp * 0.28 + curves * 0.16 + difficulty * 0.14;
   // Bosses get a stingier par: every stroke over costs hearts.
   const par = boss
@@ -1505,13 +1923,14 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     id: holeId,
     name,
     par,
-    fairway: { width: W, openLeft, openRight, noFloor, widths },
+    fairway: { width: W, openLeft, openRight, noFloor, widths, wallHs, noSkirt },
     points: pts,
     path: pathPts,
     obstacles,
     zones,
     collectibles,
     decor: decorList,
+    tunnels,
     solids: extraSolids,
     tip: boss ? `Boss hole! Clear it to bank a trinket and stardust.${tip ? ` ${tip}` : ''}` : tip,
   });

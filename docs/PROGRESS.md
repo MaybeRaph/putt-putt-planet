@@ -16,6 +16,7 @@
 | v1.2 Planet Hopper roguelike mode + Clubhouse hub | ✅ done (see below) |
 | v1.3 level variety, trinket levels, Windows fullscreen, fixes | ✅ done (see below) |
 | v1.4 hole personalities, forks, water, tougher bosses, Ultra graphics, memory | ✅ done (see below) |
+| v1.5 flowing set pieces (corkscrews, slides, loops, tunnels, drops, leaps, spring pads), curved forks, team-size hearts | ✅ done (see below) |
 
 **Next steps (not started):** real accounts/auth; persist rooms across server restarts; switch the client to the non-`compat` Rapier build (separate .wasm, ~1 MB smaller download); optional outline pass; hand-tuned pars from playtesting with humans (current pars are designer estimates, sanity-checked by the solver).
 
@@ -59,6 +60,16 @@
 - Tests: 40 (physics, rules, progression, protocol, course data + solver spot-checks, lobby/room integration, latency interpolation). `npm run validate:courses` sweeps all 45 holes.
 - Bug bash fixes: Esc couldn't resume (controls disabled while paused); solo sim kept running while paused; three r187 shadow-map deprecation.
 - Production: vendor chunk split (app 94 KB gz, three 150 KB, rapier 1.67 MB), inline boot splash for instant first paint, single-process server (static + ws), path-traversal guarded, standalone server bundle verified from an empty dir. Dockerfile written (Docker not installed on the dev machine, so the image build itself is untested).
+
+## v1.5 — flow, set pieces and team-size balance (done)
+- **Team-size hearts** (`teamHearts` / `picnicHeal` / `secondWindHearts` in `HopperMatch.ts`): 4 / 7 / 10 / 12 / 14 / 16 max hearts for 1–6 players, Picnic heals 1 / 2 / 2 / 3 / 3 / 4, Second Wind 2 / 3 / 3 / 4 / 4 / 5. Three players is the reference (unchanged). A Monte Carlo of whole runs with modelled player skill put an average solo player at ~98% runs won under the old rules vs ~75% for an average trio; the new tables bring solo to ~74%.
+- **Set pieces** (new specials in `generate.ts`): **spiral** (one full turn round a tower down 1.6–2 m; the run-out passes under the lead-in; the tower is the inner rail), **slide** (S-bend chute down 1.2–2.1 m with taller rails), **drop** (one or two ledges; the lower green tucks under the ledge), **leap** (kicker or **spring pad** up onto a higher ledge over water), **loop** (funnel rail into the entry lane, divider and stop rail, boost at low depth). Tunnels (`Hole.tunnels`, visual only) cover some sweeping corners, slides and quiet straights ≥ 3 m; they fade while a ball is inside and never block the camera or aim line.
+- **Ribbon floors** (`shape: 'ribbon'`, `ribbonEdges` in `math.ts`): corkscrews and slides are one smooth strip, a Rapier trimesh with `FIX_INTERNAL_EDGES`. Tilted box segments left 1–2 cm lips at every joint, enough to launch a fast ball out of the spiral.
+- **Spring pad** zone (`kind: 'spring'`): pops a grounded ball up at `strength` m/s once per visit, keeping its pace. From 3 m back the window is roughly 50–60% power.
+- **Curved forks**: the lanes swoop apart (cosine profile) round the lagoon and back together; inner rails start exactly where the lanes stop sharing a floor, with a rock at each island tip. No more cross-bars or 90° corners. Corners next to forks can be rounded too.
+- **Flow**: ~82% of corners are curves (bigger radii: 2.4–4.2 m for 90°, 3.5–6 m for 45°), slopes on curves get proper floor overlap, personalities Funhouse (loops, spirals, slides, tunnels) and Skyway (drops, leaps, jumps, terraces) replace Pinball. Deck step is now 4 (coprime with 9 personalities).
+- **Clutter**: the bumper-field plaza is now a wide green with a boulder and two well-spaced bumpers; fork bumper lanes have 2 bumpers; two features share a stretch only if it is ≥ 9 m, they sit ~44% of it apart, and never two blockers (bumpers, pillars, spinners, movers, gates, windmills). Bumpers left meadow/space flavour lists. Tested: every spinner/windmill keeps > 0.6 m clear of other blockers.
+- Solver: progress cap now uses the distance the ball actually rolled (spirals and loops travel far but end up close to where they started).
 
 ## v1.4 — variety, water, bosses, graphics and memory (done)
 - **Hole personalities** (`holeArchetype` in `generate.ts`): classic, fork, switchback, long drive, summit, waterworks, gauntlet, pinball. Each tweaks leg count/length, width, special weights, hazard weights, corner rounding and the name. Stages walk a per-run shuffled deck three steps at a time, so neighbouring stages and the options of one route vote never share a personality.

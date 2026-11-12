@@ -1,4 +1,4 @@
-import type { Collectible, CollectibleKind, Decor, HoleInput, Obstacle, Solid, Vec3, Zone } from '../schema';
+import type { Collectible, CollectibleKind, Decor, HoleInput, Obstacle, Solid, Tunnel, Vec3, Zone } from '../schema';
 import type { SurfaceKind } from '../config';
 import { yawFor } from '../math';
 
@@ -26,6 +26,10 @@ export interface FairwayOpts {
   noFloor?: number[];
   /** Per-segment width overrides. */
   widths?: Record<number, number>;
+  /** Per-segment rail height overrides. */
+  wallHs?: Record<number, number>;
+  /** Segment indices whose floor gets no earth skirt (it passes over another track). */
+  noSkirt?: number[];
 }
 
 const EPS = 1e-4;
@@ -93,8 +97,8 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
     const s = segs[i];
     let a = points[i],
       b = points[i + 1];
+    const w = widthOf(i);
     if (isFlat(i)) {
-      const w = widthOf(i);
       let ext0 = 0,
         ext1 = 0;
       if (i === 0) ext0 = opts.openStart ? 0 : endPad;
@@ -103,8 +107,17 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
       else if (turnAt(i + 1)) ext1 = turnExt(i + 1, Math.max(w, widthOf(i + 1)));
       a = [a[0] - s.dx * ext0, a[1], a[2] - s.dz * ext0];
       b = [b[0] + s.dx * ext1, b[1], b[2] + s.dz * ext1];
+    } else {
+      // Sloped and turning (slides, spirals): overlap along the slope to close the outer wedge.
+      const k = s.dy / s.l;
+      const ext0 = turnAt(i) ? turnExt(i, w) : 0;
+      const ext1 = i < segs.length - 1 && turnAt(i + 1) ? turnExt(i + 1, w) : 0;
+      a = [a[0] - s.dx * ext0, a[1] - k * ext0, a[2] - s.dz * ext0];
+      b = [b[0] + s.dx * ext1, b[1] + k * ext1, b[2] + s.dz * ext1];
     }
-    out.push(beam(a, b, widthOf(i), FLOOR_T, 'floor', surface));
+    const f = beam(a, b, w, FLOOR_T, 'floor', surface);
+    if (opts.noSkirt?.includes(i)) f.skirt = false;
+    out.push(f);
   }
 
   // Walls: offset polylines with mitred joints.
@@ -146,7 +159,8 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
       // A short segment beside a sharp turn: the inner mitre swallows it whole, and the
       // neighbouring rails already close the corner.
       if ((b[0] - a[0]) * s.dx + (b[2] - a[2]) * s.dz < 0.05) continue;
-      out.push(beam(a, b, WALL_T, wallH + FLOOR_T, 'wall', 'grass', wallH));
+      const h = opts.wallHs?.[i] ?? wallH;
+      out.push(beam(a, b, WALL_T, h + FLOOR_T, 'wall', 'grass', h));
     }
   }
 
@@ -165,6 +179,21 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
   if (!opts.openStart) cap(points[0], segs[0], -1, widthOf(0));
   if (!opts.openEnd) cap(points[n - 1], segs[segs.length - 1], 1, widthOf(segs.length - 1));
   return out;
+}
+
+/** A smooth floor strip along a curving, sloping centreline (slides, corkscrews). */
+export function ribbon(path: Vec3[], width: number, surface: SurfaceKind = 'grass', skirt = true): Solid {
+  const m = path[Math.floor(path.length / 2)];
+  return {
+    shape: 'ribbon',
+    role: 'floor',
+    center: [m[0], m[1] - FLOOR_T / 2, m[2]],
+    size: [1, FLOOR_T, width],
+    rot: [0, 0, 0],
+    surface,
+    path: path.map((p) => [...p] as Vec3),
+    ...(skirt ? {} : { skirt: false }),
+  };
 }
 
 /** Flat rectangular floor slab from (x0,z0) to (x1,z1) with top at y. */
@@ -302,6 +331,7 @@ export interface HoleSpec {
   obstacles?: Obstacle[];
   collectibles?: Collectible[];
   decor?: Decor[];
+  tunnels?: Tunnel[];
   tip?: string;
   gravityScale?: number;
 }
@@ -319,6 +349,7 @@ export function makeHole(spec: HoleSpec): HoleInput {
     obstacles: spec.obstacles ?? [],
     collectibles: spec.collectibles ?? [],
     decor: spec.decor ?? [],
+    tunnels: spec.tunnels ?? [],
     path: spec.path ?? spec.points,
     tip: spec.tip,
     gravityScale: spec.gravityScale ?? 1,

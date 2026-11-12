@@ -51,6 +51,19 @@ export function stageDepth(index: number): number {
 }
 
 /**
+ * Team-size balance. Hearts are shared, but each player's result moves them, so a bigger team
+ * swings the pool harder; three players is the reference. A solo run gets a smaller pool and
+ * smaller picnics so it is about as hard to finish as a three-player run.
+ */
+const TEAM_HEARTS = [4, 7, 10, 12, 14, 16];
+const PICNIC_HEAL = [1, 2, 2, 3, 3, 4];
+const SECOND_WIND = [2, 3, 3, 4, 4, 5];
+const byTeam = (table: number[], n: number) => table[Math.max(0, Math.min(table.length, n) - 1)];
+export const teamHearts = (players: number) => byTeam(TEAM_HEARTS, players);
+export const picnicHeal = (players: number) => byTeam(PICNIC_HEAL, players);
+export const secondWindHearts = (players: number) => byTeam(SECOND_WIND, players);
+
+/**
  * A Match whose holes are generated as the run goes, with hearts, forks, trinkets, omens and
  * rest stops on top of the normal stroke rules. Runs on the host (server, direct host, or
  * locally for solo); clients mirror its state from `score().hopper`.
@@ -75,8 +88,7 @@ export class HopperMatch extends Match {
     this.seed = setup.seed;
     this.worlds = runWorlds(setup.seed);
     this.upgrades = setup.upgrades;
-    const n = setup.players.length;
-    const max = 6 + this.rank('vigor') + 2 * (n - 1);
+    const max = teamHearts(setup.players.length) + this.rank('vigor');
     this.hs = {
       seed: setup.seed,
       stage: 0,
@@ -250,10 +262,12 @@ export class HopperMatch extends Match {
 
   private grant(reward: RewardId): void {
     switch (reward) {
-      case 'heal':
-        this.heal(2);
-        this.note('❤️ +2 hearts', 'good');
+      case 'heal': {
+        const n = picnicHeal(this.players.length);
+        this.heal(n);
+        this.note(`❤️ +${n} heart${n > 1 ? 's' : ''}`, 'good');
         break;
+      }
       case 'dust':
         this.hs.dust += 12;
         this.note('✨ +12 stardust', 'good');
@@ -323,8 +337,9 @@ export class HopperMatch extends Match {
       if (this.hs.hearts <= 0) {
         if (this.hs.secondWind) {
           this.hs.secondWind = false;
-          this.hs.hearts = 3;
-          this.note('🔥 Second Wind! Back up with 3 hearts', 'epic');
+          const back = secondWindHearts(this.players.length);
+          this.hs.hearts = back;
+          this.note(`🔥 Second Wind! Back up with ${back} hearts`, 'epic');
         } else {
           this.hs.hearts = 0;
           this.pendingEnd = 'lost';

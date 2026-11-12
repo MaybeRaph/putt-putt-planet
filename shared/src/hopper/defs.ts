@@ -148,7 +148,7 @@ export const REWARD_IDS = ['heal', 'dust', 'trinket', 'vitality', 'gamble'] as c
 export type RewardId = (typeof REWARD_IDS)[number];
 
 export const REWARDS: Record<RewardId, { id: RewardId; icon: string; name: string; desc: string }> = {
-  heal: { id: 'heal', icon: '❤️', name: 'Picnic', desc: 'Heal 2 hearts.' },
+  heal: { id: 'heal', icon: '❤️', name: 'Picnic', desc: 'Heal 2 hearts (1 solo, more for bigger teams).' },
   dust: { id: 'dust', icon: '✨', name: 'Stardust Cache', desc: '+12 stardust.' },
   trinket: { id: 'trinket', icon: '🎁', name: 'Trinket', desc: 'Choose 1 of 3 trinkets.' },
   vitality: { id: 'vitality', icon: '💖', name: 'Vitality', desc: '+1 max heart and heal 1.' },
@@ -161,7 +161,7 @@ export const UPGRADES = {
   secondwind: {
     icon: '🔥',
     name: 'Second Wind',
-    desc: 'Once per run, get back up with 3 hearts.',
+    desc: 'Once per run, get back up with 3 hearts (2 solo, more for bigger teams).',
     costs: [90],
   },
   dice: {

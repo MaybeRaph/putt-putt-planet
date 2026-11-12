@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { holeArchetype } from '../src/hopper/generate';
+import { holeArchetype, lastHoleSpecials } from '../src/hopper/generate';
 import { TRINKET_IDS } from '../src/hopper/defs';
 import {
   HopperMatch,
@@ -11,6 +11,7 @@ import {
   mergeProfiles,
   solveHole,
   parseS2C,
+  picnicHeal,
   stageHole,
   type HopperMatch as HM,
 } from '../src/index';
@@ -139,6 +140,53 @@ describe('Planet Hopper', () => {
     expect(solveHole(fork!, { maxStrokes: fork!.par + 5, angles: 36 }).holed).toBe(true);
   }, 120_000);
 
+  it('builds flowing set pieces: corkscrews, slides, loops, drops, leaps and tunnels', () => {
+    const seen = new Set<string>();
+    let spiral: ReturnType<typeof stageHole> | null = null;
+    let loop: ReturnType<typeof stageHole> | null = null;
+    for (let seed = 1; seed <= 30 && !(spiral && loop && seen.size >= 6); seed++) {
+      const m = new HopperMatch({ seed, players: [players[0]], upgrades: {}, keepsakes: [] });
+      for (let i = 0; i < SKELETON.length; i++) {
+        const spec = m.makeSpec(i, null, null, seed % 3);
+        if (spec.kind !== 'hole') continue;
+        const h = stageHole(seed, i, spec);
+        for (const x of lastHoleSpecials) seen.add(x);
+        if (lastHoleSpecials.includes('spiral') && !lastHoleSpecials.includes('fork')) spiral ??= h;
+        if (lastHoleSpecials.includes('loop') && spec.depth < 8) loop ??= h;
+      }
+    }
+    for (const k of ['spiral', 'slide', 'loop', 'drop', 'leap', 'tunnel']) expect(seen).toContain(k);
+    // A corkscrew is one smooth floor (no seams to kick the ball) wound round a tower.
+    expect(spiral!.solids.some((s) => s.shape === 'ribbon' && s.skirt === false)).toBe(true);
+    expect(spiral!.solids.some((s) => s.shape === 'cylinder' && s.size[1] > 3)).toBe(true);
+    for (const h of [spiral!, loop!]) expect(solveHole(h, { maxStrokes: h.par + 5, angles: 36 }).holed).toBe(true);
+  }, 180_000);
+
+  it('keeps clear space round spinners and windmills, and bumpers sparse', () => {
+    for (let seed = 1; seed <= 25; seed++) {
+      const m = new HopperMatch({ seed, players: [players[0]], upgrades: {}, keepsakes: [] });
+      for (let i = 0; i < SKELETON.length; i++) {
+        const spec = m.makeSpec(i, null, null, seed % 3);
+        if (spec.kind === 'rest') continue;
+        const h = stageHole(seed, i, spec);
+        expect(h.obstacles.filter((o) => o.type === 'bumper').length).toBeLessThanOrEqual(4);
+        const things = h.obstacles.flatMap((o) =>
+          o.type === 'spinner'
+            ? [{ sweep: true, p: o.pos, r: o.length / 2 }]
+            : o.type === 'windmill'
+              ? [{ sweep: true, p: o.pos, r: 1 }]
+              : o.type === 'bumper'
+                ? [{ sweep: false, p: o.pos, r: o.radius }]
+                : [],
+        );
+        for (const a of things)
+          for (const b of things)
+            if (a !== b && a.sweep)
+              expect(Math.hypot(a.p[0] - b.p[0], a.p[2] - b.p[2]) - a.r - b.r).toBeGreaterThan(0.6);
+      }
+    }
+  });
+
   it('generates the same hole for the same seed and spec', () => {
     const m = new HopperMatch({ seed: 42, players, upgrades: {}, keepsakes: [] });
     for (const i of [0, 3, 4, 10, SKELETON.length - 1]) {
@@ -157,7 +205,7 @@ describe('Planet Hopper', () => {
       upgrades: { vigor: 1 },
       keepsakes: ['magnet', 'magnet', 'nope'],
     });
-    expect(m.hs.maxHearts).toBe(6 + 1 + 2);
+    expect(m.hs.maxHearts).toBe(7 + 1);
     // Two players with the same keepsake: it stacks into a level 2 trinket.
     expect(m.hs.trinkets).toEqual(['magnet']);
     expect(m.hs.levels.magnet).toBe(2);
@@ -168,7 +216,7 @@ describe('Planet Hopper', () => {
     finishHole(m, (e) => (e === 'a' ? 1 : par + 2));
     expect(m.phase).toBe('holeEnd');
     expect(m.hs.lastDelta).toEqual({ by: { a: 2, b: -2 }, net: 0 });
-    expect(m.hs.hearts).toBe(9);
+    expect(m.hs.hearts).toBe(8);
     m.advance();
     const c = m.hs.choice!;
     expect(c.kind).toBe('route');
@@ -199,8 +247,20 @@ describe('Planet Hopper', () => {
     expect(dead.hs.result).toBe('lost');
     const saved = run({ secondwind: 1 });
     expect(saved.hs.result).toBe('running');
-    expect(saved.hs.hearts).toBe(3);
+    expect(saved.hs.hearts).toBe(2);
     expect(saved.hs.secondWind).toBe(false);
+  });
+
+  it('scales the heart pool and picnics with team size (three players is the reference)', () => {
+    const team = (n: number) =>
+      new HopperMatch({
+        seed: 5,
+        players: Array.from({ length: n }, (_, k) => ({ id: `p${k}`, name: `P${k}` })),
+        upgrades: {},
+        keepsakes: [],
+      });
+    expect([1, 2, 3, 4].map((n) => team(n).hs.maxHearts)).toEqual([4, 7, 10, 12]);
+    expect([1, 2, 3, 4].map((n) => picnicHeal(n))).toEqual([1, 2, 2, 3]);
   });
 
   it('banks stardust into the profile, and upgrades cost it', () => {

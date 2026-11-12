@@ -7,12 +7,14 @@ import {
   kinematicParts,
   obstaclePose,
   obstacleSolids,
+  ribbonEdges,
   windmillVisual,
   type Collectible,
   type Hole,
   type Obstacle,
   type Solid,
   type Theme,
+  type Tunnel,
   type Zone,
 } from '@ppp/shared';
 import { canvasTexture, checkerMaterial, darken, mottleTexture, toon, woodTexture } from './materials';
@@ -40,6 +42,8 @@ export class CourseView {
   private readonly animTextures: { tex: THREE.Texture; dir: THREE.Vector2; speed: number }[] = [];
   private readonly waterMats: THREE.ShaderMaterial[] = [];
   private readonly spinners: { obj: THREE.Object3D; speed: number }[] = [];
+  private readonly springs: { obj: THREE.Object3D; pulse: number; z: Zone }[] = [];
+  private readonly tubes: { t: Tunnel; mats: THREE.MeshStandardMaterial[]; base: number; fade: number }[] = [];
   private flag!: THREE.Group;
   private flagCloth!: THREE.Mesh;
   private flagLift = 0;
@@ -66,6 +70,7 @@ export class CourseView {
     for (const s of hole.solids) this.addSolid(s);
     for (const o of hole.obstacles) this.addObstacle(o);
     for (const z of hole.zones) this.addZone(z);
+    for (const t of hole.tunnels ?? []) this.addTunnel(t);
     for (const c of hole.collectibles) this.addItem(c, opts.ownedItems?.has(c.id) ?? false);
     this.addCup();
     this.addTee();
@@ -133,7 +138,71 @@ export class CourseView {
     return this.own(new THREE.BoxGeometry(s.size[0], s.size[1], s.size[2]));
   }
 
+  /** Smooth strip (slide, corkscrew): checker top, earthy sides, and a curtain down to the ground. */
+  private addRibbon(s: Solid): void {
+    const { left, right } = ribbonEdges(s.path!, s.size[2]);
+    const n = left.length;
+    const th = s.size[1];
+    const pos: number[] = [];
+    const top: number[] = [],
+      side: number[] = [];
+    // Rows: left top, right top, left bottom, right bottom.
+    for (let i = 0; i < n; i++) {
+      const l = left[i],
+        r = right[i];
+      pos.push(l[0], l[1], l[2], r[0], r[1], r[2], l[0], l[1] - th, l[2], r[0], r[1] - th, r[2]);
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const a = i * 4,
+        b = a + 4;
+      top.push(a + 1, a, b, a + 1, b, b + 1);
+      side.push(a, a + 2, b + 2, a, b + 2, b); // left side
+      side.push(a + 1, b + 1, b + 3, a + 1, b + 3, a + 3); // right side
+      side.push(a + 2, a + 3, b + 3, a + 2, b + 3, b + 2); // bottom
+    }
+    const geo = this.own(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex([...top, ...side]);
+    geo.addGroup(0, top.length, 0);
+    geo.addGroup(top.length, side.length, 1);
+    geo.computeVertexNormals();
+    const sideMat = toon(darken(this.theme.ground, 0.62));
+    sideMat.side = THREE.DoubleSide;
+    const mesh = new THREE.Mesh(geo, [this.floorTopMaterial(s), sideMat]);
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    this.root.add(mesh);
+    if (s.skirt === false || this.theme.decorKit === 'space') return;
+    // Earth curtains under both edges so a slide reads as a bank, not a floating plank.
+    const cpos: number[] = [];
+    const cidx: number[] = [];
+    const bottom = this.groundY - 0.6;
+    for (const edge of [left, right]) {
+      const base = cpos.length / 3;
+      for (const p of edge) cpos.push(p[0], p[1] - th, p[2], p[0], bottom, p[2]);
+      for (let i = 0; i < n - 1; i++) {
+        const a = base + i * 2;
+        cidx.push(a, a + 1, a + 3, a, a + 3, a + 2);
+      }
+    }
+    const cg = this.own(new THREE.BufferGeometry());
+    cg.setAttribute('position', new THREE.Float32BufferAttribute(cpos, 3));
+    cg.setIndex(cidx);
+    cg.computeVertexNormals();
+    const skirtMat = (this.skirtMaterial() as THREE.MeshStandardMaterial).clone();
+    skirtMat.side = THREE.DoubleSide;
+    skirtMat.map = null;
+    this.own(skirtMat);
+    const curtain = new THREE.Mesh(cg, skirtMat);
+    curtain.receiveShadow = true;
+    this.root.add(curtain);
+  }
+
   private addSolid(s: Solid): void {
+    if (s.shape === 'ribbon') {
+      if (s.path) this.addRibbon(s);
+      return;
+    }
     let mesh: THREE.Mesh;
     const t = this.theme;
     if (s.role === 'floor') {
@@ -186,7 +255,7 @@ export class CourseView {
 
   /** Visual-only earth "skirt" under a floor down to the terrain, so raised greens read as terraces. */
   private addSkirt(s: Solid): void {
-    if (this.theme.decorKit === 'space' || s.shape !== 'box') return;
+    if (this.theme.decorKit === 'space' || s.shape !== 'box' || s.skirt === false) return;
     if (Math.abs(s.rot[0]) > 0.6 || Math.abs(s.rot[2]) > 0.6) return;
     const bb = computeBounds([s]);
     const top = bb.min[1] + 0.02;
@@ -266,6 +335,137 @@ export class CourseView {
   // Zones
   // ------------------------------------------------------------------------------------------
 
+  /**
+   * A covered stretch: an arched tube swept along the centreline, with a rim at each mouth. It
+   * fades to see-through while a ball rolls inside, and never blocks the camera or aim line.
+   */
+  private addTunnel(t: Tunnel): void {
+    const kit = this.theme.decorKit;
+    const look: Record<string, { a: string; b: string; rim: string; opacity: number; metal: number }> = {
+      meadow: { a: '#8a5a32', b: '#a8743f', rim: '#d9b98a', opacity: 1, metal: 0 },
+      candy: { a: '#ff8fb8', b: '#fff2f6', rim: '#ff5d9a', opacity: 1, metal: 0 },
+      frozen: { a: '#a9d8ee', b: '#d8f1fb', rim: '#ffffff', opacity: 0.72, metal: 0.1 },
+      clockwork: { a: '#b8893f', b: '#8f6a33', rim: '#e0c07a', opacity: 1, metal: 0.65 },
+      space: { a: '#7fe0ff', b: '#4a6cff', rim: '#c8f4ff', opacity: 0.55, metal: 0.3 },
+    };
+    const L = look[kit] ?? look.meadow;
+    const pts = t.points.map((p) => new THREE.Vector3(...p));
+    const n = pts.length;
+    const rho = t.width / 2 + 0.28;
+    const rise = 1.05;
+    const seg = 18;
+    // Frames: tangent averaged at joints, widened by the mitre so the tube keeps its width round bends.
+    const frames = pts.map((p, i) => {
+      const a = pts[Math.max(0, i - 1)],
+        b = pts[Math.min(n - 1, i + 1)];
+      const dir = new THREE.Vector3().subVectors(b, a);
+      dir.y = 0;
+      dir.normalize();
+      let k = 1;
+      if (i > 0 && i < n - 1) {
+        const d0 = new THREE.Vector3().subVectors(p, pts[i - 1]).setY(0).normalize();
+        k = 1 / Math.max(0.5, d0.dot(dir));
+      }
+      return { p, side: new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(k) };
+    });
+    let len = 0;
+    const along = pts.map((p, i) => (i ? (len += p.distanceTo(pts[i - 1])) : 0));
+    const pos: number[] = [],
+      uv: number[] = [],
+      idx: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const { p, side } = frames[i];
+      for (let j = 0; j <= seg; j++) {
+        const th = (Math.PI * j) / seg;
+        pos.push(
+          p.x + side.x * rho * Math.cos(th),
+          p.y - 0.05 + rise * rho * Math.sin(th),
+          p.z + side.z * rho * Math.cos(th),
+        );
+        uv.push(along[i] / 1.2, j / seg);
+      }
+    }
+    for (let i = 0; i < n - 1; i++)
+      for (let j = 0; j < seg; j++) {
+        const a = i * (seg + 1) + j,
+          b = a + seg + 1;
+        idx.push(a, b, a + 1, b, b + 1, a + 1);
+      }
+    const geo = this.own(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const map = this.own(
+      canvasTexture(128, (c, sz) => {
+        c.fillStyle = L.a;
+        c.fillRect(0, 0, sz, sz);
+        c.fillStyle = L.b;
+        if (kit === 'meadow') {
+          // bark: long grain lines
+          c.strokeStyle = 'rgba(60,35,15,0.35)';
+          c.lineWidth = 3;
+          for (let k = 0; k < 9; k++) {
+            c.beginPath();
+            c.moveTo(0, (k * sz) / 9 + 4);
+            c.lineTo(sz, (k * sz) / 9 + 4 + ((k % 3) - 1) * 3);
+            c.stroke();
+          }
+        } else if (kit === 'clockwork') {
+          c.fillRect(0, 0, sz / 6, sz);
+          c.fillStyle = 'rgba(255,240,200,0.6)';
+          for (let k = 0; k < 6; k++) c.fillRect(sz / 12 - 3, (k * sz) / 6 + 8, 6, 6);
+        } else c.fillRect(0, 0, sz / 2, sz);
+      }),
+    );
+    const outer = this.own(
+      new THREE.MeshStandardMaterial({
+        map,
+        roughness: kit === 'frozen' || kit === 'space' ? 0.25 : 0.75,
+        metalness: L.metal,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: L.opacity,
+        depthWrite: L.opacity >= 1,
+      }),
+    );
+    const tube = new THREE.Mesh(geo, outer);
+    tube.castShadow = L.opacity >= 1;
+    tube.receiveShadow = true;
+    this.root.add(tube);
+    // Rims at both mouths.
+    const rimMat = this.own(
+      new THREE.MeshStandardMaterial({ color: L.rim, roughness: 0.5, metalness: L.metal, transparent: true, opacity: 1 }),
+    );
+    for (const i of [0, n - 1]) {
+      const { p, side } = frames[i];
+      const ring = new THREE.Mesh(this.own(new THREE.TorusGeometry(rho, 0.09, 8, 24, Math.PI)), rimMat);
+      ring.position.set(p.x, p.y - 0.05, p.z);
+      ring.scale.set(1, rise, 1);
+      // The torus lies in its XY plane: point its X axis along the tube's sideways direction.
+      ring.rotation.y = -Math.atan2(side.z, side.x);
+      ring.castShadow = true;
+      this.root.add(ring);
+    }
+    this.tubes.push({ t, mats: [outer, rimMat], base: L.opacity, fade: 0 });
+  }
+
+  /** True when `b` is inside the tube (near its centreline and under the arch). */
+  private inTube(t: Tunnel, b: THREE.Vector3): boolean {
+    const r = t.width / 2 + 0.6;
+    for (let i = 0; i < t.points.length - 1; i++) {
+      const a = t.points[i],
+        c = t.points[i + 1];
+      const abx = c[0] - a[0],
+        abz = c[2] - a[2];
+      const l2 = abx * abx + abz * abz || 1e-6;
+      const k = Math.max(0, Math.min(1, ((b.x - a[0]) * abx + (b.z - a[2]) * abz) / l2));
+      const y = a[1] + (c[1] - a[1]) * k;
+      if (Math.hypot(b.x - a[0] - abx * k, b.z - a[2] - abz * k) < r && b.y > y - 0.4 && b.y < y + 1.4) return true;
+    }
+    return false;
+  }
+
   private addZone(z: Zone): void {
     const floorY = z.center[1] - z.size[1] / 2 + 0.05;
     const mkPlane = (mat: THREE.Material, y: number) => {
@@ -321,6 +521,50 @@ export class CourseView {
           this.own(new THREE.MeshToonMaterial({ map: tex, polygonOffset: true, polygonOffsetFactor: -2 })),
           floorY + 0.003,
         );
+        break;
+      }
+      case 'spring': {
+        // Launch pad: a round striped pad on a squat coil.
+        const r = Math.min(z.size[0], z.size[2]) / 2 - 0.02;
+        const g = new THREE.Group();
+        g.position.set(z.center[0], floorY, z.center[2]);
+        const coil = new THREE.Mesh(
+          this.own(new THREE.TorusGeometry(r * 0.62, 0.035, 6, 20)),
+          this.own(new THREE.MeshStandardMaterial({ color: '#cfd8dc', metalness: 0.7, roughness: 0.3 })),
+        );
+        coil.rotation.x = Math.PI / 2;
+        coil.position.y = 0.02;
+        const tex = this.own(
+          canvasTexture(128, (c, sz) => {
+            for (let k = 5; k >= 1; k--) {
+              c.fillStyle = k % 2 ? '#ff3d5a' : '#fff4e0';
+              c.beginPath();
+              c.arc(sz / 2, sz / 2, (sz / 2) * (k / 5), 0, 7);
+              c.fill();
+            }
+            c.fillStyle = '#ffd23f';
+            c.beginPath();
+            c.moveTo(sz / 2, sz * 0.28);
+            c.lineTo(sz * 0.66, sz * 0.5);
+            c.lineTo(sz * 0.34, sz * 0.5);
+            c.fill();
+          }),
+        );
+        const disk = new THREE.Mesh(
+          this.own(new THREE.CylinderGeometry(r, r, 0.06, 28)),
+          [
+            this.own(new THREE.MeshStandardMaterial({ color: '#b71c3a', roughness: 0.5 })),
+            this.own(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45 })),
+            this.own(new THREE.MeshStandardMaterial({ color: '#b71c3a', roughness: 0.5 })),
+          ],
+        );
+        disk.position.y = 0.06;
+        disk.rotation.y = z.rotY;
+        disk.castShadow = true;
+        disk.receiveShadow = true;
+        g.add(coil, disk);
+        this.root.add(g);
+        this.springs.push({ obj: disk, pulse: 0, z });
         break;
       }
       case 'boost':
@@ -805,6 +1049,23 @@ export class CourseView {
     }
     for (const a of this.animTextures) a.tex.offset.x += a.dir.x * a.speed * dt * 0.8;
     for (const w of this.waterMats) w.uniforms.uTime.value = now;
+    for (const sp of this.springs) {
+      const on = balls.some(
+        (b) => Math.hypot(b.x - sp.z.center[0], b.z - sp.z.center[2]) < Math.min(sp.z.size[0], sp.z.size[2]) / 2 + 0.2,
+      );
+      if (on && sp.pulse <= 0) sp.pulse = 1;
+      sp.pulse = Math.max(0, sp.pulse - dt * 3);
+      sp.obj.position.y = 0.06 + Math.sin(sp.pulse * Math.PI) * 0.18;
+    }
+    for (const tb of this.tubes) {
+      const inside = balls.some((b) => this.inTube(tb.t, b));
+      tb.fade += ((inside ? 1 : 0) - tb.fade) * Math.min(1, dt * 6);
+      const o = tb.base * (1 - 0.78 * tb.fade);
+      for (const m of tb.mats) {
+        m.opacity = m === tb.mats[0] ? o : 1 - 0.7 * tb.fade;
+        m.depthWrite = o >= 0.99;
+      }
+    }
     for (const s of this.spinners) {
       if (s.speed) s.obj.rotation.z += s.speed * dt;
       else s.obj.position.y = 0.45 + Math.sin(now * 3) * 0.06;
@@ -837,6 +1098,7 @@ export class CourseView {
     void mat;
     const all = [...this.hole.solids, ...this.hole.obstacles.flatMap((o) => obstacleSolids(o))];
     for (const s of all) {
+      if (s.shape === 'ribbon') continue;
       const geo =
         s.shape === 'box'
           ? new THREE.BoxGeometry(...s.size)

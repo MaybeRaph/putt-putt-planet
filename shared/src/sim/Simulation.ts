@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { DT, PHYSICS, SURFACES, type SurfaceKind } from '../config';
 import type { Collectible, Hole, Obstacle, Solid, Vec3, Zone } from '../schema';
-import { clamp, dirVec, distXZ, inYawBox, quatFromEuler, rotateVec } from '../math';
+import { clamp, dirVec, distXZ, inYawBox, quatFromEuler, ribbonEdges, rotateVec } from '../math';
 import { kinematicParts, obstaclePose, obstacleSolids } from './obstacles';
 
 let ready: Promise<void> | null = null;
@@ -63,6 +63,7 @@ interface BallInternal {
   lipCooldown: number;
   teleCooldown: number;
   inBoost: boolean;
+  inSpring: boolean;
   sinkT: number;
   sinkFrom: Vec3;
   /** Scripted ride through a loop-the-loop. */
@@ -146,10 +147,11 @@ export class Simulation {
   // ------------------------------------------------------------------------------------------
 
   private addStatic(s: Solid, obstacle?: Obstacle): void {
-    const desc = solidColliderDesc(s.shape, s.size);
-    const q = quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
+    const ribbon = s.shape === 'ribbon' && s.path;
+    const desc = ribbon ? ribbonColliderDesc(s.path!, s.size[2]) : solidColliderDesc(s.shape as 'box', s.size);
+    const q = ribbon ? [0, 0, 0, 1] : quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
     desc
-      .setTranslation(s.center[0], s.center[1], s.center[2])
+      .setTranslation(...((ribbon ? [0, 0, 0] : s.center) as [number, number, number]))
       .setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] })
       .setFriction(0)
       .setRestitution(s.restitution ?? defaultRestitution(s.role, s.surface))
@@ -225,6 +227,7 @@ export class Simulation {
       lipCooldown: 0,
       teleCooldown: 0,
       inBoost: false,
+      inSpring: false,
       sinkT: 0,
       sinkFrom: [...p],
       loop: null,
@@ -330,6 +333,7 @@ export class Simulation {
     b.state.lastRest = [...pos];
     b.slowTime = 0;
     b.inBoost = false;
+    b.inSpring = false;
   }
 
   /** Remove a ball from play (picked up after hitting the stroke limit). */
@@ -435,6 +439,7 @@ export class Simulation {
     let surface: SurfaceKind = ground?.info.surface ?? 'grass';
     let gravity = this.hole.gravityScale;
     let boosted = false;
+    let sprung = false;
     for (const z of zones) {
       if (z.kind === 'sand' || z.kind === 'ice' || z.kind === 'sticky') surface = z.kind;
       else if (z.kind === 'lowGravity') gravity = z.strength;
@@ -450,6 +455,13 @@ export class Simulation {
           v = [v[0] + d[0] * add, v[1], v[2] + d[2] * add];
         }
         if (!b.inBoost) this.events.push({ type: 'boost', ball: s.id });
+      } else if (z.kind === 'spring') {
+        sprung = true;
+        // Launch pad: pops a rolling ball straight up (once per visit), keeping its pace.
+        if (!b.inSpring && ground && v[1] < z.strength) {
+          v = [v[0], z.strength, v[2]];
+          this.events.push({ type: 'boost', ball: s.id });
+        }
       } else if (z.kind === 'oneWay') {
         const d = dirVec(z.dir);
         const along = v[0] * d[0] + v[2] * d[2];
@@ -460,6 +472,7 @@ export class Simulation {
       }
     }
     b.inBoost = boosted;
+    b.inSpring = sprung;
     s.surface = surface;
     s.grounded = !!ground;
     b.body.setGravityScale(gravity, true);
@@ -779,6 +792,23 @@ function solidColliderDesc(shape: 'box' | 'cylinder', size: Vec3): RAPIER.Collid
     : RAPIER.ColliderDesc.cylinder(size[1] / 2, size[0] / 2);
 }
 
+/** Top surface of a ribbon as a triangle mesh (internal edges smoothed so seams can't kick). */
+function ribbonColliderDesc(path: Vec3[], width: number): RAPIER.ColliderDesc {
+  const { left, right } = ribbonEdges(path, width);
+  const v = new Float32Array(path.length * 6);
+  left.forEach((p, i) => v.set(p, i * 6));
+  right.forEach((p, i) => v.set(p, i * 6 + 3));
+  const idx: number[] = [];
+  for (let i = 0; i < path.length - 1; i++) {
+    const l0 = i * 2,
+      r0 = i * 2 + 1,
+      l1 = i * 2 + 2,
+      r1 = i * 2 + 3;
+    idx.push(r0, l0, l1, r0, l1, r1);
+  }
+  return RAPIER.ColliderDesc.trimesh(v, new Uint32Array(idx), RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES);
+}
+
 function defaultRestitution(role: Solid['role'], surface: SurfaceKind): number {
   if (role === 'floor') return SURFACES[surface].restitution;
   return surface === 'rubber' ? 0.95 : PHYSICS.wallRestitution;
@@ -788,6 +818,17 @@ export function computeBounds(solids: Solid[]): { min: Vec3; max: Vec3 } {
   const min: Vec3 = [Infinity, Infinity, Infinity];
   const max: Vec3 = [-Infinity, -Infinity, -Infinity];
   for (const s of solids) {
+    if (s.shape === 'ribbon' && s.path) {
+      const { left, right } = ribbonEdges(s.path, s.size[2]);
+      for (const p of [...left, ...right])
+        for (const dy of [0, -s.size[1]])
+          for (let i = 0; i < 3; i++) {
+            const v = p[i] + (i === 1 ? dy : 0);
+            min[i] = Math.min(min[i], v);
+            max[i] = Math.max(max[i], v);
+          }
+      continue;
+    }
     const q = quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
     for (const sx of [-0.5, 0.5])
       for (const sy of [-0.5, 0.5])

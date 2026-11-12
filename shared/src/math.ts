@@ -5,6 +5,37 @@ export type Quat = [number, number, number, number];
 
 export const QUAT_ID: Quat = [0, 0, 0, 1];
 
+/**
+ * Left and right edges of a level-across strip of `width` along `path` (mitred at the joints, so
+ * the strip keeps its width round bends). Each cross-section is horizontal, so a turning, sloping
+ * path makes a smooth helicoid with no seams.
+ */
+export function ribbonEdges(path: Vec3[], width: number): { left: Vec3[]; right: Vec3[] } {
+  const n = path.length;
+  const left: Vec3[] = [],
+    right: Vec3[] = [];
+  const dir = (a: Vec3, b: Vec3) => {
+    const dx = b[0] - a[0],
+      dz = b[2] - a[2];
+    const l = Math.hypot(dx, dz) || 1;
+    return [dx / l, dz / l];
+  };
+  for (let i = 0; i < n; i++) {
+    const d0 = dir(path[Math.max(0, i - 1)], path[Math.max(1, i)]);
+    const d1 = dir(path[Math.min(n - 2, i)], path[Math.min(n - 1, i + 1)]);
+    let tx = d0[0] + d1[0],
+      tz = d0[1] + d1[1];
+    const tl = Math.hypot(tx, tz) || 1;
+    tx /= tl;
+    tz /= tl;
+    const k = width / 2 / Math.max(0.5, tx * d1[0] + tz * d1[1]);
+    const p = path[i];
+    left.push([p[0] - tz * k, p[1], p[2] + tx * k]);
+    right.push([p[0] + tz * k, p[1], p[2] - tx * k]);
+  }
+  return { left, right };
+}
+
 /** Unit vector in the XZ plane for an angle (0 = +X, PI/2 = +Z). */
 export function dirVec(angle: number): Vec3 {
   return [Math.cos(angle), 0, Math.sin(angle)];

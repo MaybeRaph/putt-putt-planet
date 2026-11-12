@@ -16,6 +16,8 @@ export interface ShotResult {
   hazard: boolean;
   tick: number;
   collected: string[];
+  /** Distance the ball rolled across the ground (XZ), loops and spirals included. */
+  travel: number;
 }
 
 export function simulateShot(
@@ -33,8 +35,13 @@ export function simulateShot(
   let hazard = false;
   const collected: string[] = [];
   let t = 0;
+  let travel = 0;
+  let last = sim.getBall('b')!.pos.slice();
   for (; t < maxTicks; t++) {
     sim.step();
+    const now = sim.getBall('b')!.pos;
+    travel += Math.hypot(now[0] - last[0], now[2] - last[2]);
+    last = now.slice();
     for (const e of sim.events.splice(0)) {
       if (e.type === 'water' || e.type === 'oob') hazard = true;
       if (e.type === 'collect') collected.push(e.item);
@@ -45,7 +52,7 @@ export function simulateShot(
     if (hazard) break;
   }
   const b = sim.getBall('b')!;
-  const res = { pos: [...b.pos] as Vec3, holed: b.phase === 'holed', hazard, tick: sim.tick, collected };
+  const res = { pos: [...b.pos] as Vec3, holed: b.phase === 'holed', hazard, tick: sim.tick, collected, travel };
   sim.dispose();
   return res;
 }
@@ -69,7 +76,7 @@ export function solveHole(
   const total = progressAlong(hole.path, hole.cup).total;
   // A shot can't advance along the path much further than the ball actually moved, so a ball
   // that stops beside a later leg (behind a wall) isn't scored as having got there.
-  const reach = (from: Vec3, to: Vec3) => Math.hypot(to[0] - from[0], to[2] - from[2]) + 1.5;
+  const reach = (r: ShotResult) => r.travel + 1.5;
   let along = 0;
   for (let s = 1; s <= maxStrokes; s++) {
     let best: { score: number; angle: number; power: number; r: ShotResult } | null = null;
@@ -86,7 +93,7 @@ export function solveHole(
         score = 1e6 - power; // prefer the softest holing shot
       else if (r.hazard) score = -1e6;
       else {
-        const pr = progressAlong(hole.path, r.pos, along + reach(pos, r.pos));
+        const pr = progressAlong(hole.path, r.pos, along + reach(r));
         score =
           pr.along -
           pr.dist * 0.5 -
@@ -97,7 +104,7 @@ export function solveHole(
     }
     shots.push({ angle: best!.angle, power: best!.power, pos: best!.r.pos });
     if (best!.r.holed) return { strokes: s, holed: true, shots };
-    along = progressAlong(hole.path, best!.r.pos, along + reach(pos, best!.r.pos)).along;
+    along = progressAlong(hole.path, best!.r.pos, along + reach(best!.r)).along;
     pos = best!.r.pos;
     tick = best!.r.tick;
   }
