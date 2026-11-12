@@ -126,14 +126,12 @@ export function stageHole(seed: number, index: number, spec: StageSpec): Hole {
       gravityScale = [0.55, 0.75, 0.87, 1][g];
       break;
     case 'slick':
-      // The whole green freezes (sand and sticky patches stay put). The compass thaws it to a
-      // frost, then (Lv2) leaves the slopes grippy too.
+      // The whole green freezes, slopes, curves and slides included (sand and sticky patches stay
+      // put). The compass thaws it to a frost (Lv1), then to a thin rime (Lv2).
       if (g < 3)
         for (const s of input.solids as Solid[]) {
           if (s.role !== 'floor' || s.color) continue;
-          const sloped = Math.abs(s.rot[0]) > 0.02 || Math.abs(s.rot[2]) > 0.02;
-          if (g === 2 && sloped) continue;
-          s.surface = g ? 'frost' : 'ice';
+          s.surface = SLICK_SURFACES[g];
         }
       break;
     default:
@@ -141,6 +139,9 @@ export function stageHole(seed: number, index: number, spec: StageSpec): Hole {
   }
   return HoleSchema.parse({ ...input, theme, cupScale, powerScale, wind, gravityScale });
 }
+
+/** Slick Greens surface by Storm Compass level (0 = no compass). */
+export const SLICK_SURFACES = ['slick', 'frost', 'rime'] as const;
 
 /** Signature mechanics that turn up on some legs of a hole. */
 type Special =

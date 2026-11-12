@@ -37,6 +37,7 @@ import { scorecard } from './Hud';
 import { audio } from '../audio/Audio';
 import { LockerPreview } from './LockerPreview';
 import type { LocalHost } from '../net/LocalHost';
+import { APP_VERSION } from '../version';
 
 const WORLD_EMOJI: Record<string, string> = {
   meadow: '🌻',
@@ -115,6 +116,7 @@ export class Screens {
           h('button', { class: 'btn', onclick: () => this.settings(() => this.mainMenu()) }, '⚙️ Settings'),
         ),
       ),
+      h('div', { class: 'version-tag', title: 'Game version' }, `v${APP_VERSION}`),
       h(
         'div',
         { class: 'footer-hint' },
@@ -442,6 +444,80 @@ export class Screens {
   /** True while a lobby sub-screen (the locker) is open: room updates must not replace it. */
   inLobbySub = false;
 
+  /** What the lobby on screen was drawn from (everything except pings). */
+  private lobbyKey = '';
+  private lastReadyClick = 0;
+
+  /** A message that stays until dismissed (e.g. "the host removed you"). */
+  notice(title: string, text: string): void {
+    const g = this.game;
+    g.ui.showOverlay(
+      h(
+        'div',
+        { class: 'modal notice' },
+        h('h2', {}, title),
+        h('p', { class: 'center' }, text),
+        h('button', { class: 'btn primary', onclick: () => g.ui.showOverlay(null) }, 'OK'),
+      ),
+    );
+  }
+
+  /** Host only: ask before removing a player. `back` re-opens whatever was underneath. */
+  private confirmKick(id: string, name: string, back?: () => void): void {
+    const g = this.game;
+    const close = () => (back ? back() : g.ui.showOverlay(null));
+    g.ui.showOverlay(
+      h(
+        'div',
+        { class: 'modal notice' },
+        h('h2', {}, `Remove ${name}?`),
+        h('p', { class: 'center muted' }, 'They will be disconnected from this game.'),
+        h(
+          'div',
+          { class: 'row' },
+          h(
+            'button',
+            {
+              class: 'btn danger',
+              onclick: () => {
+                g.net.send({ t: 'kick', id });
+                close();
+              },
+            },
+            '✕ Remove',
+          ),
+          h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        ),
+      ),
+    );
+  }
+
+  /** Pause menu (online host): the players, each with a Remove button. */
+  private playersModal(): void {
+    const g = this.game;
+    const room = g.room;
+    if (!room) return this.pause();
+    const me = g.profile.profile.id;
+    g.ui.showOverlay(
+      h(
+        'div',
+        { class: 'modal' },
+        h('h2', {}, 'Players'),
+        ...room.players.map((p) =>
+          h(
+            'div',
+            { class: 'kick-row' },
+            h('span', {}, p.id === room.hostId ? '👑 ' : '', p.name, p.connected ? '' : ' (reconnecting…)'),
+            p.id !== me
+              ? h('button', { class: 'btn small danger', onclick: () => this.confirmKick(p.id, p.name, () => this.playersModal()) }, '✕ Remove')
+              : h('small', { class: 'muted' }, 'you'),
+          ),
+        ),
+        h('button', { class: 'btn', onclick: () => this.pause() }, 'Back'),
+      ),
+    );
+  }
+
   lobby(): void {
     const g = this.game;
     this.inLobbySub = false;
@@ -450,6 +526,27 @@ export class Screens {
     const me = g.profile.profile.id;
     const isHost = room.hostId === me;
     const meP = room.players.find((p) => p.id === me);
+    // The host re-sends the room every few seconds (fresh pings). Rebuilding the whole screen each
+    // time swallowed clicks that straddled a rebuild and closed open menus, so when nothing but
+    // the pings changed, just update those in place.
+    const key = JSON.stringify([
+      { ...room, players: room.players.map((p) => ({ ...p, ping: 0 })) },
+      me,
+      g.net.kind,
+      g.lanAddresses,
+      !!g.localHost,
+      this.p.level,
+      starsTotal(this.p),
+    ]);
+    const shown = g.ui.screenLayer.querySelector('.screen.lobby');
+    if (shown && key === this.lobbyKey) {
+      shown.querySelectorAll<HTMLElement>('.lp-ping').forEach((el, i) => {
+        const p = room.players[i];
+        if (p) el.textContent = p.connected ? `${p.ping} ms` : 'reconnecting…';
+      });
+      return;
+    }
+    this.lobbyKey = key;
     const course = COURSES.find((c) => c.id === room.courseId) ?? COURSES[0];
     const link = `${location.origin}${location.pathname}?join=${room.code}`;
     const players = h(
@@ -475,6 +572,14 @@ export class Screens {
             { class: `lp-ready ${p.ready || p.id === room.hostId ? 'on' : ''}` },
             p.id === room.hostId ? 'Host' : p.ready ? 'Ready ✓' : 'Not ready',
           ),
+          // Host only, and never on the host's own card.
+          isHost && p.id !== me
+            ? h(
+                'button',
+                { class: 'btn small danger lp-kick', title: `Remove ${p.name} from the game`, onclick: () => this.confirmKick(p.id, p.name) },
+                '✕ Remove',
+              )
+            : null,
         );
       }),
       ...Array.from({ length: RULES.maxPlayers - room.players.length }, () =>
@@ -579,9 +684,11 @@ export class Screens {
               : `${course.holes.length} holes · Par ${course.holes.reduce((a, x) => a + x.par, 0)}`,
           ),
         ),
+        // Pinned to the bottom of the window: on short windows (laptops with display scaling) the
+        // Ready button used to sit below the fold, where a guest could miss it entirely.
         h(
           'div',
-          { class: 'row center' },
+          { class: 'row center lobby-actions' },
           isHost
             ? h(
                 'button',
@@ -591,8 +698,19 @@ export class Screens {
             : h(
                 'button',
                 {
-                  class: `btn big ${meP?.ready ? '' : 'primary'}`,
-                  onclick: () => g.net.send({ t: 'ready', ready: !meP?.ready }),
+                  class: `btn big ready-btn ${meP?.ready ? '' : 'primary'}`,
+                  onclick: () => {
+                    // Decide from the room as it is now (not as it was when this button was drawn),
+                    // and ignore the second half of a double-click so it can't undo the first.
+                    const now = performance.now();
+                    if (now - this.lastReadyClick < 400) return;
+                    this.lastReadyClick = now;
+                    const cur = g.room?.players.find((p) => p.id === g.profile.profile.id);
+                    const ready = !cur?.ready;
+                    console.info(`[lobby] ready -> ${ready} (link ${g.net.status}, in room: ${!!cur})`);
+                    if (g.net.status !== 'online') g.ui.toast('Not connected to the host — leave and join again', 'bad', 4000);
+                    g.net.send({ t: 'ready', ready });
+                  },
                 },
                 meP?.ready ? 'Not ready' : '✓ Ready!',
               ),
@@ -951,6 +1069,9 @@ export class Screens {
             )
           : null,
         h('button', { class: 'btn', onclick: () => this.settings(() => this.pause(), true) }, '⚙️ Settings'),
+        online && g.room && g.room.hostId === g.profile.profile.id && g.room.players.length > 1
+          ? h('button', { class: 'btn', onclick: () => this.playersModal() }, '👥 Players')
+          : null,
         h(
           'button',
           { class: 'btn danger', onclick: () => (online ? this.game.leaveOnline() : g.goMenu()) },

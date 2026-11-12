@@ -7,7 +7,7 @@ export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
 export const SNAPSHOT_RATE = 20; // Hz, server -> client ball state
 
-export type SurfaceKind = 'grass' | 'sand' | 'ice' | 'sticky' | 'rubber' | 'metal' | 'candy' | 'frost';
+export type SurfaceKind = 'grass' | 'sand' | 'ice' | 'sticky' | 'rubber' | 'metal' | 'candy' | 'slick' | 'frost' | 'rime';
 
 export interface SurfaceParams {
   /** Constant deceleration (units/s^2) while touching the ground: rolling resistance. */
@@ -59,6 +59,12 @@ export const PHYSICS = {
   teleportCooldown: 0.6,
 } as const;
 
+/**
+ * How much more grip a frozen green (the Slick Greens omen) has than a true ice patch. Raising it
+ * shortens the slide; 1 = as slippery as ice. Only the omen's surfaces (slick, frost, rime) use it.
+ */
+export const SLICK_GREEN_GRIP = 1.2;
+
 export const SURFACES: Record<SurfaceKind, SurfaceParams> = {
   grass: { rolling: 1.15, drag: 0.32, restitution: 0.12, settle: 1 },
   candy: { rolling: 1.0, drag: 0.28, restitution: 0.15, settle: 1 },
@@ -67,8 +73,12 @@ export const SURFACES: Record<SurfaceKind, SurfaceParams> = {
   sand: { rolling: 6.0, drag: 2.2, restitution: 0.02, settle: 2.2 },
   sticky: { rolling: 4.5, drag: 3.6, restitution: 0.0, settle: 2.5 },
   ice: { rolling: 0.12, drag: 0.04, restitution: 0.1, settle: 0.6 },
+  /** Slick Greens: the whole green frozen over. Ice, with SLICK_GREEN_GRIP times the grip. */
+  slick: { rolling: 0.12 * SLICK_GREEN_GRIP, drag: 0.04 * SLICK_GREEN_GRIP, restitution: 0.1, settle: 0.6 },
   /** Frosted green (Slick Greens softened by the Storm Compass): slippery, but not glass. */
-  frost: { rolling: 0.36, drag: 0.1, restitution: 0.11, settle: 0.8 },
+  frost: { rolling: 0.36 * SLICK_GREEN_GRIP, drag: 0.1 * SLICK_GREEN_GRIP, restitution: 0.11, settle: 0.8 },
+  /** Thin frost (Storm Compass Lv2): halfway between frost and grass, slopes included. */
+  rime: { rolling: 0.62 * SLICK_GREEN_GRIP, drag: 0.17 * SLICK_GREEN_GRIP, restitution: 0.12, settle: 0.9 },
 };
 
 export const RULES = {

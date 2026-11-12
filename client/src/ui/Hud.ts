@@ -206,6 +206,33 @@ export class Hud {
     else this.tip.classList.add('hidden');
   }
 
+  private introEl: HTMLElement | null = null;
+
+  /** Hole intro card (name and par over the flyover); the rest of the HUD steps aside. */
+  showIntro(kicker: string, name: string, par: number, skippable: boolean): void {
+    this.introEl?.remove();
+    this.introEl = h(
+      'div',
+      { class: 'hole-intro' },
+      h('div', { class: 'hi-kicker' }, kicker),
+      h('div', { class: 'hi-name' }, name),
+      h('div', { class: 'hi-par' }, `Par ${par}`),
+      skippable ? h('div', { class: 'hi-skip' }, coarse ? 'Tap to skip' : 'Press any key or click to skip') : null,
+    );
+    this.root.append(this.introEl);
+    this.root.classList.toggle('in-intro', skippable);
+    pulse(this.introEl, 'enter');
+  }
+
+  hideIntro(): void {
+    this.root.classList.remove('in-intro');
+    const el = this.introEl;
+    if (!el) return;
+    this.introEl = null;
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 400);
+  }
+
   showTip(text: string): void {
     this.tip.textContent = `💡 ${touchify(text)}`;
     this.tip.classList.remove('hidden');

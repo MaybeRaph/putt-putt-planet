@@ -28,6 +28,8 @@ export const C2S = z.discriminatedUnion('t', [
   z.object({ t: z.literal('ready'), ready: z.boolean() }),
   z.object({ t: z.literal('configure'), courseId: id, mode: OnlineModeSchema, chaos: z.boolean() }),
   z.object({ t: z.literal('start') }),
+  /** Host only: remove a player from the room. */
+  z.object({ t: z.literal('kick'), id }),
   z.object({
     t: z.literal('shot'),
     seq: z.number().int().nonnegative(),
@@ -158,6 +160,8 @@ export const S2C = z.discriminatedUnion('t', [
   z.object({ t: z.literal('error'), code: z.string(), message: z.string() }),
   z.object({ t: z.literal('joined'), code: z.string(), token: z.string() }),
   z.object({ t: z.literal('left') }),
+  /** The host removed you from the room. */
+  z.object({ t: z.literal('kicked'), message: z.string().max(200) }),
   z.object({ t: z.literal('room'), room: RoomStateSchema }),
   z.object({
     t: z.literal('matchStart'),

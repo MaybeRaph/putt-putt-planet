@@ -20,7 +20,7 @@ Then open http://localhost:5173. `npm run dev` starts the Vite client (`:5173`) 
 
 | Way | Needs | How |
 |---|---|---|
-| **Direct (no server)** | nothing but the game | *Play with Friends → Host direct game*, then **Create invite code** for each friend. Send it (Messages, Discord…); they choose *Enter invite code*, paste it and send back the **reply code**, which you paste under that invite. The game runs on the host's device. |
+| **Direct (no server)** | nothing but the game | *Play with Friends → Host direct game*, then **Create invite code** for each friend. Send it (Messages, Discord…); they choose *Enter invite code*, paste it and send back the **reply code**, which you paste under that invite. Codes are short (under 200 letters and digits) and survive chat formatting. The game runs on the host's device. The host can remove a player with **✕ Remove** on their card in the lobby, or from *Pause → Players* during a game. |
 | **Local network** | desktop app on the host | *Host on local network* shows an address + room code; friends use *Join by address*. Friends without the app can also open `http://<address>:8787` in a browser on the same Wi-Fi. |
 | **Online server** | a deployed server (see Deployment) | *Create room* / *Join a room* with the 6-letter code or invite link. |
 
@@ -142,6 +142,7 @@ The key idea: **the same `Match` + `Simulation` code runs in the browser for sol
 
 | Version | What changed | Download |
 | ------- | ------------ | -------- |
+| v1.7.0 | Shorter invite codes (about a quarter of the length, letters and digits only); fix for a player who couldn't ready up (the Ready button is now always on screen, and retried invites no longer fight each other); the loop-the-loop track no longer goes invisible; Slick Greens now freeze slopes too, in every sector, and slide about 20% less; a camera flyover with the hole's name and par at the start of every hole (any key or tap skips it); more varied scenery (rolling hills, ridges, ice shelves, mesas, dunes, craters, distant mountain layers); a host-only button to remove a player, in the lobby and mid-game; the game version on the main menu | [v1.7.0](https://github.com/MaybeRaph/putt-putt-planet/releases/tag/v1.7.0) |
 | v1.6.0 | Polish and fixes: seamless curve and fork floors, tunnels kept clear of the course, grass right up to the rails, Slick Greens / Gimme Clover / spring pad fixes, harder late planets (≈ 1 in 3 runs won), double corkscrews, steep chutes, bumps, new hole types, see-through camera, putter styles and a real putter sound, faster loading | [v1.6.0](https://github.com/MaybeRaph/putt-putt-planet/releases/tag/v1.6.0) |
 | v1.5.0 | Corkscrews, slides, loop-the-loops, tunnels, ledge drops, leaps and spring pads; curved forks and flowing corners; less obstacle clutter; hearts scaled to team size | [v1.5.0](https://github.com/MaybeRaph/putt-putt-planet/releases/tag/v1.5.0) |
 | v1.4.0 | Hole personalities, forked fairways round lagoons, brooks and ponds, more elevation, tougher bosses, rarer trinket levels, Ultra graphics, lower memory use | [v1.4.0](https://github.com/MaybeRaph/putt-putt-planet/releases/tag/v1.4.0) |

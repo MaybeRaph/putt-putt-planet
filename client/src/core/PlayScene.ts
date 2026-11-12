@@ -6,6 +6,7 @@ import { CourseView } from '../rendering/CourseView';
 import { BallView } from '../rendering/BallView';
 import { CameraRig } from '../rendering/CameraRig';
 import { AimView } from '../rendering/AimView';
+import { HoleIntro } from '../rendering/HoleIntro';
 import { Particles } from '../rendering/Particles';
 import { Controls, type HostAction } from '../input/Controls';
 import { Hud } from '../ui/Hud';
@@ -39,6 +40,11 @@ export class PlayScene {
   private readonly fallbackFocus = new THREE.Vector3();
   private holeEndShown = false;
   private finished = false;
+  /** Hole intro flyover in progress (camera only; the match runs on regardless). */
+  private intro: HoleIntro | null = null;
+  private introCardTimer = 0;
+  /** Hole whose intro has been started (so it plays once per hole). */
+  private introHole = -1;
 
   constructor(
     private readonly game: Game,
@@ -69,7 +75,7 @@ export class PlayScene {
     this.hud.palette = game.settings.palette;
 
     this.controls = new Controls(r.gl.domElement, r.camera, this.rig, game.settings, {
-      canAim: () => this.session.canShoot() && !this.game.paused,
+      canAim: () => this.session.canShoot() && !this.game.paused && !this.intro,
       ballPos: () => this.myBallView()?.pos ?? null,
       onShoot: (angle, power) => this.shoot(angle, power),
       onAction: (a) => this.onAction(a),
@@ -92,6 +98,8 @@ export class PlayScene {
       session.bus.on('disconnected', ({ reason }) => this.hud.message(reason, 'bad', 4000)),
     );
     this.renderer.gl.domElement.addEventListener('pointerdown', this.onDebugClick);
+    window.addEventListener('keydown', this.onIntroKey, true);
+    window.addEventListener('pointerdown', this.onIntroTap, true);
     this.loadHole();
   }
 
@@ -143,7 +151,65 @@ export class PlayScene {
     const layers = this.session.players().filter((p) => p.connected).length;
     audio.playTheme(theme, Math.max(1, layers));
     for (let i = 0; i < 3; i++) this.hud.removeLabel(`crate:${i}`);
+    this.startIntro();
   }
+
+  // ------------------------------------------------------------------------------------------
+  // Hole intro
+  // ------------------------------------------------------------------------------------------
+
+  /**
+   * Flyover + name card at the start of a hole. Purely local presentation: every player gets it
+   * when their client loads the hole, and skipping it changes nothing for anyone else.
+   */
+  private startIntro(force = false): void {
+    this.endIntro();
+    const idx = this.loadedHole;
+    const course = this.session.course;
+    const hole = course.holes[idx];
+    const score = this.session.score();
+    // Only for a fresh hole: someone rejoining mid-hole goes straight to their ball.
+    // (Online, the hole-start event arrives before the new scores, so that event forces it.)
+    const fresh =
+      force ||
+      (score.phase === 'playing' &&
+        this.session.obstacleTime() < 3 &&
+        Object.values(score.strokesThisHole).every((n) => !n));
+    if (!hole || !fresh || new URLSearchParams(location.search).has('nointro')) return;
+    this.introHole = idx;
+    const kicker =
+      course.id === 'hopper'
+        ? 'Planet Hopper'
+        : this.session.mode === 'daily'
+          ? 'Daily Challenge'
+          : `Hole ${idx + 1} of ${course.holes.length}`;
+    // Reduced motion: no camera move, just the card for a moment (it never blocks play).
+    const fly = !this.game.settings.reducedMotion;
+    this.hud.showIntro(kicker, hole.name, hole.par, fly);
+    if (fly) this.intro = new HoleIntro(hole.path);
+    else this.introCardTimer = window.setTimeout(() => this.hud.hideIntro(), 2200);
+  }
+
+  private endIntro(): void {
+    clearTimeout(this.introCardTimer);
+    this.intro = null;
+    this.hud.hideIntro();
+  }
+
+  private readonly onIntroKey = (e: KeyboardEvent): void => {
+    if (!this.intro || this.game.paused || this.game.ui.overlayOpen) return;
+    if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key) || /^F\d+$/.test(e.key)) return;
+    if ((e.target as HTMLElement | null)?.closest?.('input, textarea')) return;
+    // The key only skips: it must not also charge a shot, pause or open chat.
+    e.stopPropagation();
+    e.preventDefault();
+    this.intro.skip();
+  };
+
+  private readonly onIntroTap = (): void => {
+    if (!this.intro || this.game.paused || this.game.ui.overlayOpen) return;
+    this.intro.skip();
+  };
 
   private ensureBallView(id: string): BallView {
     let b = this.balls.get(id);
@@ -235,6 +301,7 @@ export class PlayScene {
     switch (ev.type) {
       case 'holeStart':
         this.loadHole();
+        if (this.introHole !== this.loadedHole) this.startIntro(true);
         break;
       case 'shot':
         if (!mine) audio.putt(ev.power * 0.6); // own shots already played instantly on input
@@ -635,8 +702,14 @@ export class PlayScene {
         : this.fallbackFocus.copy(v3(this.session.course.holes[this.loadedHole].cup));
     }
     this.rig.update(dt, focus);
-    // Anything between the camera and the ball fades so you can always see your shot.
-    view.updateOcclusion(this.rig.camera.position, focus, dt);
+    if (this.intro) {
+      // The rig has just placed the gameplay camera; the intro blends the flyover into it.
+      this.intro.update(dt, this.rig.camera, this.rig.camera.position.clone(), this.rig.lookPoint);
+      if (this.intro.done) this.endIntro();
+    }
+    // Anything between the camera and the ball fades so you can always see your shot (during
+    // the flyover: whatever hides the spot being shown).
+    view.updateOcclusion(this.rig.camera.position, this.intro && this.intro.blend < 0.5 ? this.intro.look : focus, dt);
 
     // Slow-mo on a final putt approaching the cup (local only).
     if (this.session.kind === 'local' && !rm && me && me.phase === 'moving') {
@@ -770,6 +843,9 @@ export class PlayScene {
   dispose(): void {
     this.unsub.forEach((u) => u());
     this.renderer.gl.domElement.removeEventListener('pointerdown', this.onDebugClick);
+    window.removeEventListener('keydown', this.onIntroKey, true);
+    window.removeEventListener('pointerdown', this.onIntroTap, true);
+    clearTimeout(this.introCardTimer);
     this.controls.dispose();
     this.view?.dispose();
     for (const b of this.balls.values()) b.dispose();

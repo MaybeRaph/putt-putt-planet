@@ -189,7 +189,12 @@ export class NetClient {
       return;
     }
     this.transport = tr;
+    // A transport that has been replaced (the player switched to another link) must not touch
+    // the connection state any more: its late "closed" event used to mark the new, working link
+    // offline, stop its pings and, in a direct game, throw the player back to the menu.
+    const current = () => this.transport === tr;
     tr.onopen = () => {
+      if (!current()) return;
       this.retry = 0;
       // Room tokens only make sense on the server that issued them.
       const token = this.target.kind === 'server' ? (this.token ?? undefined) : undefined;
@@ -201,10 +206,11 @@ export class NetClient {
         NET.pingIntervalMs,
       );
     };
-    tr.onmessage = (d) => this.receive(d);
+    tr.onmessage = (d) => current() && this.receive(d);
     tr.onclose = () => {
+      if (!current()) return;
       clearInterval(this.pingTimer);
-      if (this.transport === tr) this.transport = null;
+      this.transport = null;
       this.setStatus('offline');
       // Direct (peer) links can't be re-dialled without new codes; servers can.
       if (this.wantOpen && this.target.kind === 'server') this.scheduleReconnect();
@@ -223,6 +229,7 @@ export class NetClient {
 
   disconnect(): void {
     this.wantOpen = false;
+    clearInterval(this.pingTimer);
     const tr = this.transport;
     this.transport = null;
     tr?.close();

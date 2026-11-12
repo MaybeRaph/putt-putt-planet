@@ -275,6 +275,8 @@ export class Game {
   // Online
   // ------------------------------------------------------------------------------------------
 
+  /** Guest side: the invite we are currently answering (its link may still be connecting). */
+  private directAttempt: { cancel: () => void } | null = null;
   /** Hosting a direct (serverless) game in this client, if any. */
   localHost: LocalHost | null = null;
   /** LAN server addresses when hosting on the local network (desktop app). */
@@ -282,6 +284,8 @@ export class Game {
 
   /** Point the client back at the dedicated server and drop any direct-play state. */
   private endDirect(): void {
+    this.directAttempt?.cancel();
+    this.directAttempt = null;
     this.localHost?.shutdown();
     this.localHost = null;
     this.lanAddresses = [];
@@ -306,9 +310,16 @@ export class Game {
 
   /** Guest side of a direct game: returns the reply code, then joins once the host accepts it. */
   async joinDirect(inviteCode: string): Promise<{ reply: string; hostName: string; connected: Promise<void> }> {
+    // Only one attempt at a time: a second invite pasted while the first link is still trying
+    // would otherwise leave two links racing, and whichever opened last stole the connection.
     this.endDirect();
-    const { reply, invite, channel } = await answerInvite(inviteCode);
+    const attempt = await answerInvite(inviteCode);
+    this.directAttempt?.cancel();
+    this.directAttempt = attempt;
+    const { reply, invite, channel } = attempt;
     const connected = channel.then(async (dc) => {
+      if (this.directAttempt !== attempt) return;
+      console.info('[direct] link to the host is open, joining the room');
       this.net.useTarget({ kind: 'peer', channel: dc });
       await this.net.connect(8000);
       if (invite.room) this.net.send({ t: 'joinRoom', code: invite.room });
@@ -398,6 +409,20 @@ export class Game {
           if (this.state === 'lobby' && this.screens.inLobbySub) break;
           this.returnToLobby();
         }
+        break;
+      }
+      case 'kicked': {
+        // Removed by the host: back to the menu with a message that stays until dismissed.
+        const direct = this.net.kind !== 'server' || !this.net.isDefaultServer;
+        this.room = null;
+        this.screens.inLobbySub = false;
+        if (this.net.kind === 'server') this.net.token = null;
+        if (direct) {
+          this.net.disconnect();
+          this.endDirect();
+        }
+        this.goMenu();
+        this.screens.notice('Removed from the game', m.message);
         break;
       }
       case 'left':

@@ -49,7 +49,14 @@ const newConn = (send: (d: string) => void, close: () => void): Conn => ({
  * WebRTC data channels set up with invite/reply codes. No server involved.
  */
 export class LocalHost {
-  readonly lobby = new Lobby(memoryStorage(), false, { daily: false, interval: workerInterval });
+  readonly lobby = new Lobby(memoryStorage(), false, {
+    daily: false,
+    interval: workerInterval,
+    // A kicked friend's link is closed for good (after their "you were removed" message is sent);
+    // the host can still let them back in with a fresh invite.
+    rejoinAfterKick: true,
+    onKick: (conn) => setTimeout(() => conn.close(), 250),
+  });
   readonly bus = new EventBus<{ invites: Invite[] }>();
   private readonly peers = new Map<number, { pc: RTCPeerConnection; invite: Invite; conn?: Conn }>();
   private nextId = 1;
@@ -96,6 +103,7 @@ export class LocalHost {
     this.peers.set(id, peer);
 
     dc.onopen = () => {
+      console.info(`[direct] invite #${id}: link open`);
       invite.state = 'connected';
       const conn = newConn(
         (d) => dc.readyState === 'open' && dc.send(d),
@@ -112,6 +120,7 @@ export class LocalHost {
       this.emit();
     };
     dc.onclose = () => {
+      console.info(`[direct] invite #${id}: link closed`);
       if (peer.conn) this.lobby.onClose(peer.conn);
       invite.state = 'closed';
       this.emit();

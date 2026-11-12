@@ -23,6 +23,54 @@ export interface LandscapeOpts {
   /** True if (x, z) is within `margin` of the course footprint. */
   keepOut: (x: number, z: number, margin: number) => boolean;
   grass: number; // number of grass blades (0 = none)
+  /** Horizon haze colours for the distant mountain layers (omit to leave them out, e.g. in thick fog). */
+  haze?: { fog: string; sky: string };
+}
+
+/** Deterministic 0..1 value for a hole seed and a slot (per-hole variety in the scenery). */
+const vary = (seed: number, slot: number): number => noise2(seed * 0.731 + slot * 12.9898, slot * 4.1414 + 0.5, 911);
+
+/**
+ * Crater field: scattered bowls with raised rims (space). One candidate crater per grid cell,
+ * so the cost per sample is constant however many craters there are.
+ */
+function craters(x: number, z: number, seed: number): number {
+  const cell = 30;
+  const cx = Math.floor(x / cell),
+    cz = Math.floor(z / cell);
+  let h = 0;
+  for (let i = -1; i <= 1; i++)
+    for (let j = -1; j <= 1; j++) {
+      const gx = cx + i,
+        gz = cz + j;
+      if (noise2(gx * 7.31, gz * 3.17, seed) < 0.45) continue; // roughly half the cells are empty
+      const r = 5 + noise2(gx * 1.93, gz * 5.71, seed + 1) * 9;
+      const ox = (gx + 0.2 + 0.6 * noise2(gx * 9.1, gz * 2.3, seed + 2)) * cell;
+      const oz = (gz + 0.2 + 0.6 * noise2(gx * 4.7, gz * 8.9, seed + 3)) * cell;
+      const q = Math.hypot(x - ox, z - oz) / r;
+      if (q > 1.8) continue;
+      const bowl = q < 1 ? -r * 0.34 * (1 - q * q) : 0;
+      const rim = r * 0.2 * Math.exp(-(((q - 1) / 0.22) ** 2));
+      h += bowl + rim;
+    }
+  return h;
+}
+
+/** Wind-blown dunes: long asymmetric crests that wander with the noise. */
+function dunes(x: number, z: number, seed: number, angle: number): number {
+  const u = x * Math.cos(angle) + z * Math.sin(angle);
+  const wobble = fbm(x * 0.02, z * 0.02, 2, seed) * 9;
+  const k = (u * 0.085 + wobble) % (Math.PI * 2);
+  const s = Math.sin(k);
+  // Gentle windward slope, sharper lee side.
+  return (s > 0 ? s : s * 0.35) * 0.5 + 0.18;
+}
+
+/** Stepped shelves (glacier terraces, mesa tiers): flat treads with steep risers between. */
+function shelves(h: number, step: number): number {
+  const t = h / step;
+  const f = t - Math.floor(t);
+  return (Math.floor(t) + smoothstep(0.72, 0.98, f)) * step;
 }
 
 /**
@@ -35,9 +83,22 @@ export class Landscape {
   private grassMat: THREE.MeshStandardMaterial | null = null;
   private grassShader: { uniforms: Record<string, { value: unknown }> } | null = null;
 
+  /** Per-hole character: how strong each landform is and which way ridges and dunes run. */
+  private readonly style: { swell: number; feature: number; ridge: number; angle: number; tint: number; light: number };
+
   constructor(private readonly o: LandscapeOpts) {
     this.group.name = 'landscape';
+    const s = o.seed;
+    this.style = {
+      swell: 0.6 + vary(s, 1) * 0.9,
+      feature: 0.55 + vary(s, 2) * 0.95,
+      ridge: 0.5 + vary(s, 3) * 1.0,
+      angle: vary(s, 4) * Math.PI * 2,
+      tint: (vary(s, 5) - 0.5) * 0.07,
+      light: (vary(s, 6) - 0.5) * 0.09,
+    };
     this.buildTerrain();
+    if (o.haze) this.buildBackdrop(o.haze);
     this.buildRocks();
     if (o.grass > 0) this.buildGrass();
   }
@@ -57,7 +118,49 @@ export class Landscape {
     const mount = ridged(x * 0.011, z * 0.011, 5, s + 9) * (space ? 18 : 52) * smoothstep(34, 95, d);
     const cliffs = Math.max(0, ridged(x * 0.035, z * 0.035, 3, s + 3) - 0.55) * 26 * smoothstep(18, 40, d);
     let h = hills + mount + cliffs;
-    if (space) h += -Math.pow(Math.max(0, noise2(x * 0.06, z * 0.06, s + 5) - 0.72), 2) * 60; // craters
+    // Everything below only starts well clear of the course, so the scenery frames the hole
+    // without ever rising into the playable area or between the camera and the ball.
+    const mid = smoothstep(16, 46, d);
+    if (mid > 0) {
+      const st = this.style;
+      // A long ridge crossing the view somewhere beyond the course (direction varies per hole).
+      const ax = Math.cos(st.angle),
+        az = Math.sin(st.angle);
+      const across = (x - this.o.center.x) * -az + (z - this.o.center.y) * ax;
+      const offset = across - (48 + Math.max(this.o.half.x, this.o.half.y)) * (vary(s, 7) > 0.5 ? 1 : -1);
+      const spine = Math.exp(-((offset / 16) ** 2)) * (0.55 + 0.45 * fbm(x * 0.03, z * 0.03, 3, s + 61));
+      const swell = (fbm(x * 0.016, z * 0.016, 3, s + 21) - 0.42) * 22 * st.swell;
+      switch (this.o.kit) {
+        case 'meadow':
+          // Rolling downs and one grassy ridge.
+          h += (swell + spine * 15 * st.ridge) * mid;
+          break;
+        case 'candy': {
+          // Gumdrop mounds (smooth domes) and soft sugar dunes.
+          const drop = Math.pow(noise2(x * 0.045, z * 0.045, s + 31), 3) * 34 * st.feature;
+          h += (swell * 0.5 + drop + dunes(x, z, s + 33, st.angle) * 4 * st.ridge) * mid;
+          break;
+        }
+        case 'frozen': {
+          // Glacier shelves: stepped ice terraces with sheer faces, and a knife-edge ridge.
+          const ice = (fbm(x * 0.02, z * 0.02, 3, s + 41) - 0.3) * 30 * st.feature;
+          h += (shelves(Math.max(0, ice), 5.5) + spine * 20 * st.ridge + swell * 0.35) * mid;
+          break;
+        }
+        case 'clockwork': {
+          // Mesa country: flat-topped tiers above a dune floor.
+          const m = fbm(x * 0.019, z * 0.019, 3, s + 51);
+          const mesa = (smoothstep(0.5, 0.56, m) * 11 + smoothstep(0.62, 0.67, m) * 9) * st.feature;
+          h += (mesa + dunes(x, z, s + 53, st.angle) * 3.2 * st.ridge + swell * 0.3) * mid;
+          break;
+        }
+        case 'space':
+          // Regolith dunes and a crater rim ridge; the crater bowls come below.
+          h += (dunes(x, z, s + 71, st.angle) * 2.6 * st.ridge + spine * 12 * st.ridge + swell * 0.4) * mid;
+          break;
+      }
+    }
+    if (space) h += craters(x, z, s + 5) * (0.7 + 0.5 * this.style.feature) * smoothstep(8, 20, d);
     return this.o.groundY + h;
   };
 
@@ -76,14 +179,18 @@ export class Landscape {
     geo.computeVertexNormals();
     const nrm = geo.attributes.normal as THREE.BufferAttribute;
     const P = PALETTE[kit];
+    // Each hole shifts the sector's palette a little, so two holes on one planet don't look alike.
+    const shade = (hex: string) => new THREE.Color(hex).offsetHSL(this.style.tint, 0, this.style.light);
     const c = {
-      g1: new THREE.Color(P.g1),
-      g2: new THREE.Color(P.g2),
-      dirt: new THREE.Color(P.dirt),
-      rock: new THREE.Color(P.rock),
-      rock2: new THREE.Color(P.rock2),
+      g1: shade(P.g1),
+      g2: shade(P.g2),
+      dirt: shade(P.dirt),
+      rock: shade(P.rock),
+      rock2: shade(P.rock2),
       peak: new THREE.Color(P.peak),
     };
+    // Rock strata: faint horizontal bands on steep faces (cliffs, mesa walls, crater rims).
+    const strata = kit === 'clockwork' || kit === 'frozen' || kit === 'space' ? 0.16 : 0.08;
     const col = new Float32Array(pos.count * 3);
     const tmp = new THREE.Color();
     const rockTmp = new THREE.Color();
@@ -98,6 +205,8 @@ export class Landscape {
       rockTmp.copy(c.rock).lerp(c.rock2, n);
       tmp.lerp(rockTmp, smoothstep(0.33, 0.5, steep + y * 0.006));
       tmp.lerp(c.peak, smoothstep(30, 42, y + n * 6) * (1 - smoothstep(0.55, 0.75, steep)));
+      const band = Math.floor((y + n * 1.5) / 2.4) % 2 === 0 ? 1 : 1 - strata;
+      tmp.multiplyScalar(1 - (1 - band) * smoothstep(0.3, 0.55, steep));
       col.set([tmp.r, tmp.g, tmp.b], i * 3);
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -107,6 +216,61 @@ export class Landscape {
     mesh.name = 'terrain';
     this.group.add(mesh);
     this.owned.push(geo, mat);
+  }
+
+  /**
+   * Two rings of far-off mountains beyond the terrain's edge, each hazier than the last, for a
+   * sense of depth. They are plain unlit silhouettes (two small meshes, two draw calls), so they
+   * cost next to nothing even on low-end machines.
+   */
+  private buildBackdrop(haze: { fog: string; sky: string }): void {
+    const { center, half, kit, seed } = this.o;
+    const P = PALETTE[kit];
+    const edge = Math.max(half.x, half.y) + 118;
+    const fog = new THREE.Color(haze.fog);
+    const sky = new THREE.Color(haze.sky);
+    const layers = [
+      { r: edge, amp: kit === 'space' ? 26 : 46, base: 10, mix: 0.5, seed: seed + 201, freq: 3.1 },
+      { r: edge + 80, amp: kit === 'space' ? 40 : 78, base: 18, mix: 0.76, seed: seed + 301, freq: 2.2 },
+    ];
+    const n = 120;
+    for (const [li, L] of layers.entries()) {
+      const pos: number[] = [];
+      const col: number[] = [];
+      const idx: number[] = [];
+      const low = new THREE.Color(P.rock).lerp(fog, L.mix);
+      const high = new THREE.Color(kit === 'space' ? P.peak : P.rock2).lerp(fog, L.mix).lerp(sky, 0.25 + 0.15 * li);
+      for (let i = 0; i <= n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        // Sample the noise on a circle so the ring closes without a seam.
+        const nx = Math.cos(a) * L.freq,
+          nz = Math.sin(a) * L.freq;
+        let hgt = L.base + ridged(nx + 7, nz + 3, 4, L.seed) * L.amp * (0.55 + 0.45 * fbm(nx * 0.6, nz * 0.6, 2, L.seed + 5));
+        // Sector silhouettes: flat-topped mesas, stepped ice, rounded candy hills.
+        if (kit === 'clockwork') hgt = shelves(hgt, 14) + 4;
+        else if (kit === 'frozen') hgt = hgt * 1.15 + (i % 2) * 5;
+        else if (kit === 'candy') hgt = L.base + (hgt - L.base) * 0.7 + Math.sin(a * 9 + L.seed) * 4;
+        const x = center.x + Math.cos(a) * L.r,
+          z = center.y + Math.sin(a) * L.r;
+        pos.push(x, this.o.groundY - 30, z, x, this.o.groundY + hgt, z);
+        col.push(low.r, low.g, low.b, high.r, high.g, high.b);
+        if (i < n) {
+          const k = i * 2;
+          idx.push(k, k + 1, k + 3, k, k + 3, k + 2);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      geo.setIndex(idx);
+      const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = `backdrop:${li}`;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = -1;
+      this.group.add(mesh);
+      this.owned.push(geo, mat);
+    }
   }
 
   /** Big faceted rock spires and boulders (like cliffs rising out of the hills). */

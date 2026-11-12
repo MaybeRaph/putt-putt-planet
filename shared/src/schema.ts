@@ -12,7 +12,7 @@ export const Vec2Schema = z.tuple([num, num]);
 export type Vec3 = z.infer<typeof Vec3Schema>;
 export type Vec2 = z.infer<typeof Vec2Schema>;
 
-export const SurfaceSchema = z.enum(['grass', 'sand', 'ice', 'sticky', 'rubber', 'metal', 'candy', 'frost']);
+export const SurfaceSchema = z.enum(['grass', 'sand', 'ice', 'sticky', 'rubber', 'metal', 'candy', 'slick', 'frost', 'rime']);
 
 export const SolidSchema = z.object({
   /**

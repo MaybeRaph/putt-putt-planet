@@ -2035,3 +2035,106 @@ select:focus {
   text-align: center;
   margin-bottom: 6px;
 }
+
+/* ---------------------------------------------------------------- v1.7 */
+.version-tag {
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: calc(10px + var(--safe-b));
+  width: auto !important;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+.lobby-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  padding: 10px;
+  border-radius: 20px;
+  background: rgba(20, 32, 54, 0.55);
+  backdrop-filter: blur(6px);
+}
+.lp {
+  position: relative;
+}
+.lp-kick {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  flex: none;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+.kick-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-weight: 700;
+}
+.modal.notice {
+  max-width: min(420px, 92vw);
+  text-align: center;
+}
+.modal .center {
+  text-align: center;
+  margin: 0;
+}
+
+/* Hole intro flyover */
+.hole-intro {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 16%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  color: #fff;
+  text-align: center;
+  text-shadow:
+    0 3px 0 rgba(0, 0, 0, 0.25),
+    0 0 24px rgba(0, 20, 60, 0.55);
+  transition: opacity 0.35s;
+}
+.hole-intro.out {
+  opacity: 0;
+}
+.hole-intro .hi-kicker {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+.hole-intro .hi-name {
+  font-size: clamp(34px, 6vw, 64px);
+  font-weight: 800;
+  line-height: 1;
+}
+.hole-intro .hi-par {
+  font-size: 24px;
+  font-weight: 800;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 2px 18px;
+  text-shadow: none;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.18);
+  margin-top: 6px;
+}
+.hole-intro .hi-skip {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.8;
+  margin-top: 10px;
+}
+.hud.in-intro > *:not(.hole-intro) {
+  opacity: 0;
+  pointer-events: none !important;
+  transition: opacity 0.3s;
+}

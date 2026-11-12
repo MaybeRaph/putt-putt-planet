@@ -67,6 +67,8 @@ export class Room {
   private roomBroadcastAt = 0;
   /** Monotonic tick across holes (clients sync their clock to it). */
   private st = 0;
+  /** Players the host removed: they can't come back with the room code. */
+  private readonly kicked = new Set<string>();
 
   constructor(
     readonly code: string,
@@ -89,6 +91,7 @@ export class Room {
   join(conn: Conn): Member | string {
     if (this.members.has(conn.id!))
       return this.resume(this.members.get(conn.id!)!.token, conn) ?? 'Could not rejoin';
+    if (this.kicked.has(conn.id!)) return 'The host removed you from this game';
     if (this.phase !== 'lobby') return 'That game has already started';
     if (this.members.size >= RULES.maxPlayers) return 'Room is full';
     const p = conn.profile!;
@@ -146,7 +149,26 @@ export class Room {
     this.broadcastSys(`${m.name} disconnected`);
   }
 
-  leave(id: string): void {
+  /**
+   * Host removes a player (lobby or mid-game). Only the host may do this, and never to themself;
+   * the check is made here, on the host side, so a hand-crafted message from a guest does nothing.
+   * Returns an error message, or null when the player was removed.
+   */
+  kick(byId: string, targetId: string): string | null {
+    if (byId !== this.hostId) return 'Only the host can remove players';
+    if (targetId === this.hostId) return "The host can't be removed";
+    const target = this.members.get(targetId);
+    if (!target) return 'That player already left';
+    const by = this.members.get(byId);
+    const conn = target.conn;
+    this.send(target, { t: 'kicked', message: `${by?.name ?? 'The host'} removed you from the game` });
+    if (!this.lobby.opts.rejoinAfterKick) this.kicked.add(targetId);
+    this.leave(targetId, `${target.name} was removed by the host`);
+    if (conn) this.lobby.opts.onKick?.(conn);
+    return null;
+  }
+
+  leave(id: string, note?: string): void {
     const m = this.members.get(id);
     if (!m) return;
     if (m.conn) m.conn.room = null;
@@ -159,7 +181,7 @@ export class Room {
       return;
     }
     this.broadcastRoom();
-    this.broadcastSys(`${m.name} left`);
+    this.broadcastSys(note ?? `${m.name} left`);
   }
 
   private migrateHost(): void {
@@ -202,6 +224,11 @@ export class Room {
         m.ready = msg.ready;
         this.broadcastRoom();
         break;
+      case 'kick': {
+        const err = this.kick(m.id, msg.id);
+        if (err) this.error(m, 'not_allowed', err);
+        break;
+      }
       case 'configure': {
         if (!isHost || this.phase !== 'lobby')
           return this.error(m, 'not_allowed', 'Only the host can change settings');
@@ -492,11 +519,20 @@ export class Room {
 
   broadcast(msg: S2CMsg): void {
     const data = JSON.stringify(msg);
-    for (const m of this.members.values()) m.conn?.sendRaw(data);
+    // One player's broken link must never stop the others from getting the update.
+    for (const m of this.members.values()) this.sendRaw(m, data);
   }
 
   send(m: Member, msg: S2CMsg): void {
-    m.conn?.sendRaw(JSON.stringify(msg));
+    this.sendRaw(m, JSON.stringify(msg));
+  }
+
+  private sendRaw(m: Member, data: string): void {
+    try {
+      m.conn?.sendRaw(data);
+    } catch (e) {
+      console.warn(`[room ${this.code}] send to ${m.name} failed`, e);
+    }
   }
 
   private error(m: Member, code: string, message: string): void {

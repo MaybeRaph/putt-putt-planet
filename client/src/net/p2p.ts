@@ -184,6 +184,8 @@ export async function answerInvite(inviteCode: string): Promise<{
   invite: InvitePayload;
   channel: Promise<RTCDataChannel>;
   pc: RTCPeerConnection;
+  /** Give up on this attempt (the player pasted another invite): closes the link quietly. */
+  cancel: () => void;
 }> {
   const invite = await decodeCode(inviteCode);
   if (!invite.room) throw new Error("That's a reply code — paste the invite code your host sent you");
@@ -200,9 +202,16 @@ export async function answerInvite(inviteCode: string): Promise<{
   await pc.setLocalDescription(await pc.createAnswer());
   await gatherComplete(pc);
   const reply = await encodeCode({ sdp: pc.localDescription!.sdp });
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    pc.close();
+  };
   const channel = Promise.race([
-    opened,
+    opened.then((dc) => (cancelled ? new Promise<RTCDataChannel>(() => undefined) : dc)),
     keepKnocking(pc, offer.candidates, offer.mid, GUEST_KNOCK_MS).then(async (ok) => {
+      // A cancelled attempt never settles: no error toast for a link the player abandoned.
+      if (cancelled) return new Promise<RTCDataChannel>(() => undefined);
       if (ok) return opened;
       pc.close();
       throw new Error(
@@ -210,5 +219,5 @@ export async function answerInvite(inviteCode: string): Promise<{
       );
     }),
   ]);
-  return { reply, invite, channel, pc };
+  return { reply, invite, channel, pc, cancel };
 }

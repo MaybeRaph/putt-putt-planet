@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 
+// Single source of truth for the version shown in the game: the root package.json.
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(version) },
   server: {
     port: 5173,
     host: true,

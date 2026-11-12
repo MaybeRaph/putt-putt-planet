@@ -13,6 +13,8 @@ export class CameraRig {
   private sPitch = 0.5;
   private sDist = 4.2;
   readonly target = new THREE.Vector3();
+  /** The point the gameplay camera looked at on the last update (the hole intro blends into it). */
+  readonly lookPoint = new THREE.Vector3();
   private readonly sTarget = new THREE.Vector3();
   overview = false;
   private overviewBlend = 0;
@@ -63,6 +65,7 @@ export class CameraRig {
       sp = Math.sin(this.sPitch);
     const dir = new THREE.Vector3(-Math.cos(this.sYaw) * cp, sp, -Math.sin(this.sYaw) * cp);
     const look = this.sTarget.clone().add(new THREE.Vector3(0, 0.25, 0));
+    this.lookPoint.copy(look);
 
     // The camera passes straight through rails and obstacles (the course fades whatever is in
     // the way, see CourseView.updateOcclusion), so the view never lurches in towards the ball.

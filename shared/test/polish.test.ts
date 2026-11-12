@@ -106,9 +106,9 @@ describe('v1.6 polish', () => {
       stageHole(4, 6, { ...m.makeSpec(6, 'slick', null, 0), shaping: shaping as never[] }).solids.filter(
         (s) => s.role === 'floor' && !s.color,
       );
-    expect(floors([]).every((s) => s.surface === 'ice')).toBe(true);
+    expect(floors([]).every((s) => s.surface === 'slick')).toBe(true);
     expect(floors(['compass']).every((s) => s.surface === 'frost')).toBe(true);
-    expect(floors(['compass', 'compass', 'compass']).some((s) => s.surface === 'ice' || s.surface === 'frost')).toBe(
+    expect(floors(['compass', 'compass', 'compass']).some((s) => s.surface === 'slick' || s.surface === 'frost' || s.surface === 'rime')).toBe(
       false,
     );
   });

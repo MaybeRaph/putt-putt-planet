@@ -47,7 +47,14 @@ export class Lobby {
   constructor(
     storage: HostStorage,
     readonly dev: boolean,
-    readonly opts: { daily?: boolean; interval?: Interval } = { daily: true },
+    readonly opts: {
+      daily?: boolean;
+      interval?: Interval;
+      /** Called after a player was kicked, so the host can drop their connection. */
+      onKick?: (conn: Conn) => void;
+      /** Let a kicked player back in (direct games: the host has to hand out a new invite anyway). */
+      rejoinAfterKick?: boolean;
+    } = { daily: true },
   ) {
     this.interval = opts.interval ?? defaultInterval;
     this.profiles = storage.profiles;

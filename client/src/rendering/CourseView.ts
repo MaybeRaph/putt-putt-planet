@@ -25,6 +25,9 @@ import { Footprint } from './footprint';
 import { Landscape } from './Landscape';
 import { hashString } from '@ppp/shared';
 
+/** Frozen-looking floor surfaces (ice patches' texture, world-space UVs). */
+const isFrozen = (s: Solid['surface']): boolean => s === 'ice' || s === 'slick' || s === 'frost' || s === 'rime';
+
 /**
  * Turns a Hole (schema data) into a Three.js scene graph. Owns every geometry/material/texture
  * it creates and frees them in dispose(). Moving parts and collectibles are animated in update().
@@ -101,6 +104,8 @@ export class CourseView {
       seed: hashString(hole.id) % 100000,
       keepOut: nearCourse,
       grass: theme.decorKit === 'space' ? 0 : (opts.grass ?? 40000),
+      // No far mountains in thick fog (the Fog Bank omen hides everything past the course).
+      haze: theme.fogFar < 40 ? undefined : { fog: theme.fog, sky: theme.skyBottom },
     });
     this.root.add(this.landscape.group);
     const heightAt = this.landscape.heightAt;
@@ -200,7 +205,12 @@ export class CourseView {
     this.root.add(curtain);
   }
 
-  private addSolid(s: Solid): void {
+  /**
+   * @param separate keep a floor as its own mesh instead of merging it into the static batch.
+   *   Obstacle tracks (the loop-the-loop) are added after the batch is flushed, and they stand
+   *   between the camera and the ball, so they must be real, fadeable pieces.
+   */
+  private addSolid(s: Solid, separate = false): void {
     if (s.shape === 'ribbon') {
       this.addRibbon(s);
       return;
@@ -221,7 +231,7 @@ export class CourseView {
       const geo = s.shape === 'cylinder'
         ? new THREE.CylinderGeometry(s.size[0] / 2, s.size[0] / 2, s.size[1], 24)
         : new THREE.BoxGeometry(s.size[0], s.size[1], s.size[2]);
-      if (s.surface === 'ice' || s.surface === 'frost') {
+      if (isFrozen(s.surface)) {
         const uv = geo.attributes.uv as THREE.BufferAttribute;
         for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * s.size[0]) / 3, (uv.getY(i) * s.size[2]) / 3);
       }
@@ -232,12 +242,13 @@ export class CourseView {
           : [this.floorSide(), this.floorTopMaterial(s), this.floorSide()];
       // Raised terraces can stand between the camera and a ball on the tier below, so they stay
       // separate pieces that can fade; everything low is merged.
-      const raised = this.theme.decorKit !== 'space' && computeBounds([s]).max[1] - this.groundY > 0.9;
+      const raised = separate || (this.theme.decorKit !== 'space' && computeBounds([s]).max[1] - this.groundY > 0.9);
       if (raised) {
         const grp = new THREE.Group();
         const mesh = new THREE.Mesh(this.own(geo), s.color ? mats[0] : mats);
         mesh.applyMatrix4(m);
         mesh.receiveShadow = true;
+        mesh.castShadow = separate;
         grp.add(mesh);
         if (!s.color) this.addSkirt(s, grp);
         this.root.add(grp);
@@ -382,10 +393,10 @@ export class CourseView {
    * Ice: a mid-blue, semi-glossy surface. Kept well below pure white so that a whole frozen green
    * (Slick Greens) under a strong sun doesn't blow out or bloom on high quality.
    */
-  private iceMaterial(rx: number, ry: number, overlay = false, frost = false): THREE.MeshStandardMaterial {
+  private iceMaterial(rx: number, ry: number, overlay = false, base = '#9ccbe3'): THREE.MeshStandardMaterial {
     const tex = this.own(
       canvasTexture(256, (c, s) => {
-        c.fillStyle = frost ? '#c4dce6' : '#9ccbe3';
+        c.fillStyle = base;
         c.fillRect(0, 0, s, s);
         c.strokeStyle = 'rgba(235,248,255,0.55)';
         c.lineWidth = 2;
@@ -421,11 +432,22 @@ export class CourseView {
       case 'sand':
         return toon('#ecd9a0');
       case 'ice':
-      case 'frost': {
-        // One material per hole; box floors bake their size into the UVs (see addSolid).
-        const key = s.surface;
+      case 'slick':
+      case 'frost':
+      case 'rime': {
+        // One material per hole and look; box floors bake their size into the UVs (see addSolid).
+        // Slick Greens look like ice; frost is paler; rime is a thin frost the green shows through.
+        const key = s.surface === 'slick' ? 'ice' : s.surface;
         let m = this.iceMats.get(key);
-        if (!m) this.iceMats.set(key, (m = this.iceMaterial(1, 1, false, key === 'frost')));
+        if (!m) {
+          const base =
+            key === 'ice'
+              ? '#9ccbe3'
+              : key === 'frost'
+                ? '#c4dce6'
+                : `#${new THREE.Color(t.floorA).lerp(new THREE.Color('#d6e8ee'), 0.62).getHexString()}`;
+          this.iceMats.set(key, (m = this.iceMaterial(1, 1, false, base)));
+        }
         return m;
       }
       case 'sticky':
@@ -808,7 +830,7 @@ export class CourseView {
     // Static parts are rendered like solids.
     for (const s of obstacleSolids(o)) {
       if (o.type === 'bumper') continue; // custom look below
-      this.addSolid(s);
+      this.addSolid(s, true);
     }
     const parts = kinematicParts(o);
     if (parts) {
