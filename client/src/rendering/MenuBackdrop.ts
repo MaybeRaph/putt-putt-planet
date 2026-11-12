@@ -16,7 +16,7 @@ export class MenuBackdrop {
     this.view?.dispose();
     const hole = course.holes[holeIndex % course.holes.length];
     console.info(`[boot] backdrop ${course.id} hole ${holeIndex + 1}`);
-    this.view = new CourseView(hole, course.theme, { decorDensity: this.renderer.quality === 'low' ? 0.5 : 0.8, grass: { low: 0, medium: 8000, high: 20000 }[this.renderer.quality] });
+    this.view = new CourseView(hole, course.theme, { decorDensity: this.renderer.quality === 'low' ? 0.5 : 0.8, grass: { low: 0, medium: 8000, high: 20000, ultra: 30000 }[this.renderer.quality] });
     this.renderer.scene.add(this.view.root);
     this.renderer.applyTheme(course.theme);
     this.renderer.fitShadow(this.view.bounds.min, this.view.bounds.max);

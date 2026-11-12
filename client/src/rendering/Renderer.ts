@@ -6,8 +6,107 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import type { Theme } from '@ppp/shared';
+import { Ambience } from './Ambience';
 
-export type Quality = 'low' | 'medium' | 'high';
+export type Quality = 'low' | 'medium' | 'high' | 'ultra';
+
+interface Tier {
+  /** Max device pixel ratio. */
+  dpr: number;
+  /** Shadow map size (0 = no shadows). */
+  shadow: number;
+  /** Softening of shadow edges (texels). */
+  shadowRadius: number;
+  /** MSAA samples on the scene render target. */
+  samples: number;
+  /** Ambient occlusion resolution scale (0 = off). */
+  ao: number;
+  bloom: boolean;
+  grade: boolean;
+  /** Miniature tilt-shift blur at the top and bottom of the screen. */
+  tilt: boolean;
+  /** Atmosphere motes drifting around the camera. */
+  motes: number;
+}
+
+/**
+ * Quality tiers. Every tier renders through one MSAA scene target (the canvas itself has no
+ * MSAA backbuffer, which would be wasted memory under post-processing). High keeps the look
+ * at a much smaller memory footprint than before (1.5x pixel ratio, half-res AO, 2048 shadows);
+ * Ultra spends it all.
+ */
+export const TIERS: Record<Quality, Tier> = {
+  low: {
+    dpr: 1,
+    shadow: 0,
+    shadowRadius: 1,
+    samples: 2,
+    ao: 0,
+    bloom: false,
+    grade: false,
+    tilt: false,
+    motes: 0,
+  },
+  medium: {
+    dpr: 1.5,
+    shadow: 2048,
+    shadowRadius: 1,
+    samples: 2,
+    ao: 0,
+    bloom: false,
+    grade: true,
+    tilt: false,
+    motes: 0,
+  },
+  high: {
+    dpr: 1.5,
+    shadow: 2048,
+    shadowRadius: 2,
+    samples: 4,
+    ao: 0.5,
+    bloom: true,
+    grade: true,
+    tilt: false,
+    motes: 260,
+  },
+  ultra: {
+    dpr: 2,
+    shadow: 4096,
+    shadowRadius: 3,
+    samples: 4,
+    ao: 1,
+    bloom: true,
+    grade: true,
+    tilt: true,
+    motes: 700,
+  },
+};
+
+/** Tilt-shift: blur grows away from a horizontal focus band (a poisson disc, one pass). */
+const TiltShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uRes: { value: new THREE.Vector2(1, 1) },
+    uRadius: { value: 3 },
+    uFocus: { value: 0.47 },
+    uBand: { value: 0.2 },
+  },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; uniform vec2 uRes; uniform float uRadius; uniform float uFocus; uniform float uBand; varying vec2 vUv;
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      float k = smoothstep(uBand, uBand + 0.38, abs(vUv.y - uFocus));
+      if (k < 0.02) { gl_FragColor = c; return; }
+      vec4 acc = c; float n = 1.0;
+      for (int i = 0; i < 12; i++) {
+        float a = float(i) * 2.39996;
+        float r = sqrt((float(i) + 0.5) / 12.0);
+        acc += texture2D(tDiffuse, vUv + vec2(cos(a), sin(a)) * r * k * uRadius / uRes);
+        n += 1.0;
+      }
+      gl_FragColor = acc / n;
+    }`,
+};
 
 /** Colour grade + vignette, applied in linear space before tone mapping (OutputPass). */
 const GradeShader = {
@@ -76,13 +175,15 @@ export class Renderer {
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
   private gtao: GTAOPass | null = null;
+  private tilt: ShaderPass | null = null;
+  private readonly ambience = new Ambience();
   private time = 0;
   quality: Quality = 'high';
   contextLost = false;
   private lastTheme: Theme | null = null;
 
   constructor(container: HTMLElement) {
-    this.gl = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.gl = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     this.gl.outputColorSpace = THREE.SRGBColorSpace;
     this.gl.toneMapping = THREE.ACESFilmicToneMapping;
     this.gl.toneMappingExposure = 1.0;
@@ -105,7 +206,9 @@ export class Renderer {
     });
     const glc = this.gl.getContext();
     const dbg = glc.getExtension('WEBGL_debug_renderer_info');
-    console.info(`[render] ${dbg ? glc.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'GPU'} | maxTex ${glc.getParameter(glc.MAX_TEXTURE_SIZE)} | dpr ${devicePixelRatio} | ${innerWidth}x${innerHeight}`);
+    console.info(
+      `[render] ${dbg ? glc.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'GPU'} | maxTex ${glc.getParameter(glc.MAX_TEXTURE_SIZE)} | dpr ${devicePixelRatio} | ${innerWidth}x${innerHeight}`,
+    );
     this.pmrem = new THREE.PMREMGenerator(this.gl);
 
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.05, 600);
@@ -154,48 +257,79 @@ export class Renderer {
     sg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     this.stars = new THREE.Points(
       sg,
-      new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.9 }),
+      new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 1.6,
+        sizeAttenuation: false,
+        fog: false,
+        transparent: true,
+        opacity: 0.9,
+      }),
     );
     this.stars.visible = false;
     this.stars.renderOrder = -1;
     this.scene.add(this.stars);
+    this.scene.add(this.ambience.points);
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
 
   setQuality(q: Quality): void {
+    if (!(q in TIERS)) q = 'high';
     this.quality = q;
-    const dpr = Math.min(window.devicePixelRatio, q === 'high' ? 2 : q === 'medium' ? 1.5 : 1);
-    this.gl.setPixelRatio(dpr);
-    this.gl.shadowMap.enabled = q !== 'low';
-    const sm = q === 'high' ? 4096 : 2048;
-    this.sun.shadow.mapSize.set(sm, sm);
+    const T = TIERS[q];
+    this.gl.setPixelRatio(Math.min(window.devicePixelRatio, T.dpr));
+    this.gl.shadowMap.enabled = T.shadow > 0;
+    if (T.shadow) {
+      this.sun.shadow.mapSize.set(T.shadow, T.shadow);
+      this.sun.shadow.radius = T.shadowRadius;
+    }
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
+    this.composer?.passes.forEach((p) => p.dispose());
     this.composer?.dispose();
     this.composer = null;
     this.bloom = null;
     this.gtao = null;
-    if (q !== 'low') {
-      const size = this.gl.getDrawingBufferSize(new THREE.Vector2());
-      // MSAA render target so the post stack keeps hardware anti-aliasing.
-      const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: q === 'high' ? 4 : 2 });
-      this.composer = new EffectComposer(this.gl, rt);
-      this.composer.addPass(new RenderPass(this.scene, this.camera));
-      if (q === 'high') {
-        this.gtao = new GTAOPass(this.scene, this.camera, size.x, size.y);
-        this.gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 1.4, thickness: 1.2, scale: 1.1, samples: 12 });
-        this.gtao.blendIntensity = 0.85;
-        this.composer.addPass(this.gtao);
-        // Subtle: low strength and a threshold above 1, so only emissive bits (cups, coins, pads)
-        // glow and large pale lit surfaces (ice, snow, sky) never wash out.
-        this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.12, 0.3, 1.2);
-        this.composer.addPass(this.bloom);
+    this.tilt = null;
+    const size = this.gl.getDrawingBufferSize(new THREE.Vector2());
+    // Only the buffer the scene is drawn into needs MSAA (RenderPass draws into readBuffer =
+    // renderTarget2); the ping-pong partner stays single-sampled.
+    const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType });
+    this.composer = new EffectComposer(this.gl, rt);
+    this.composer.renderTarget2.samples = T.samples;
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    if (T.ao) {
+      const gtao = new GTAOPass(this.scene, this.camera, size.x * T.ao, size.y * T.ao);
+      gtao.updateGtaoMaterial({
+        radius: 0.9,
+        distanceExponent: 1.4,
+        thickness: 1.2,
+        scale: 1.1,
+        samples: q === 'ultra' ? 16 : 10,
+      });
+      gtao.blendIntensity = 0.85;
+      if (T.ao < 1) {
+        const full = gtao.setSize.bind(gtao);
+        gtao.setSize = (w: number, h: number) => full(Math.round(w * T.ao), Math.round(h * T.ao));
       }
-      this.composer.addPass(new ShaderPass(GradeShader));
-      this.composer.addPass(new OutputPass());
+      this.gtao = gtao;
+      this.composer.addPass(gtao);
     }
+    if (T.bloom) {
+      // Subtle: low strength and a threshold above 1, so only emissive bits (cups, coins, pads)
+      // glow and large pale lit surfaces (ice, snow, sky) never wash out.
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.12, 0.3, 1.2);
+      this.composer.addPass(this.bloom);
+    }
+    if (T.tilt) {
+      this.tilt = new ShaderPass(TiltShader);
+      this.composer.addPass(this.tilt);
+    }
+    if (T.grade) this.composer.addPass(new ShaderPass(GradeShader));
+    this.composer.addPass(new OutputPass());
+    this.ambience.setCount(T.motes);
     this.resize();
     this.scene.traverse((o) => {
       const m = (o as THREE.Mesh).material;
@@ -211,7 +345,9 @@ export class Renderer {
     u.uSunColor.value.set(theme.sun);
     const space = theme.decorKit === 'space';
     u.uClouds.value = space ? 0 : theme.decorKit === 'clockwork' ? 0.7 : 1;
-    u.uCloudColor.value.set(theme.decorKit === 'clockwork' ? '#f2d8c2' : theme.decorKit === 'candy' ? '#fff0f8' : '#ffffff');
+    u.uCloudColor.value.set(
+      theme.decorKit === 'clockwork' ? '#f2d8c2' : theme.decorKit === 'candy' ? '#fff0f8' : '#ffffff',
+    );
     const fog = this.scene.fog as THREE.Fog;
     fog.color.set(theme.fog);
     // Heavy fog (the Fog Bank omen): exact distances from the camera, and the sky itself turns
@@ -232,6 +368,7 @@ export class Renderer {
     this.hemi.groundColor.set(theme.ground);
     this.stars.visible = space && !dense;
     this.scene.environmentIntensity = space ? 0.45 : 0.75;
+    this.ambience.applyTheme(theme);
     this.buildEnvironment();
   }
 
@@ -275,7 +412,11 @@ export class Renderer {
     this.camera.fov = w < h ? 68 : 52;
     this.camera.updateProjectionMatrix();
     this.composer?.setSize(w, h);
-    this.bloom?.setSize(w, h);
+    const pr = this.gl.getPixelRatio();
+    // Bloom works at half resolution: it is a blur anyway.
+    this.bloom?.setSize((w * pr) / 2, (h * pr) / 2);
+    this.tilt?.uniforms.uRes.value.set(w * pr, h * pr);
+    if (this.tilt) this.tilt.uniforms.uRadius.value = 3.2 * pr;
   }
 
   render(dt = 1 / 60): void {
@@ -284,6 +425,12 @@ export class Renderer {
     this.skyMat.uniforms.uTime.value = this.time;
     this.sky.position.copy(this.camera.position);
     this.stars.position.copy(this.camera.position);
+    this.ambience.update(
+      this.time,
+      this.camera,
+      this.scene.fog as THREE.Fog,
+      window.innerHeight * this.gl.getPixelRatio(),
+    );
     if (this.composer) this.composer.render();
     else this.gl.render(this.scene, this.camera);
   }

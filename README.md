@@ -37,7 +37,7 @@ Direct play uses WebRTC. Public STUN servers only help the two devices find each
 | Emotes / chat              | 😀 / 💬                                                      | G / Enter                                                 | —                                   |
 | Scorecard / pause / debug  | ⏸                                                            | Tab / Esc / \`                                            | Start                               |
 
-All keys are remappable in **Settings**, which also has volume sliders, graphics quality, reduced motion and colour-blind aim palettes.
+All keys are remappable in **Settings**, which also has volume sliders, graphics quality (Low, Medium, High, Ultra), reduced motion and colour-blind aim palettes. **Ultra** renders at full Retina resolution with 4096 soft shadows, full-res ambient occlusion, a tilt-shift miniature blur and drifting atmosphere (pollen, sparkles, snowfall, embers, stardust); **High** keeps most of the look at a much smaller memory footprint.
 
 - **Par & strokes:** water and out-of-bounds cost +1 and reset you to your last spot; the stroke limit is par + 6.
 - **Stars per course:** finish it · team score at or under par · find every gem and the golden ball.
@@ -49,10 +49,10 @@ All keys are remappable in **Settings**, which also has volume sliders, graphics
 
 Main menu → **🪐 Planet Hopper** opens **the Clubhouse**, the hub between runs. For co-op, host a game and pick *Planet Hopper* in the lobby (up to 6 players).
 
-- **A run** crosses 4 planets (Meadow first, Space last, two of Candy/Frozen/Clockwork in between): 3 procedurally generated holes, then a **boss hole**, then a **Wishing Green** rest stop. That makes 19 stages. Holes get longer, narrower and busier the deeper you go: curved bends and 45° diagonals, ramps and humps, spinners, sliding gates, windmills, water beside open edges, ice, conveyors, plus each planet's signature hazards. Some holes have a **special**: a kicker-ramp **jump** over a water gap, a fairway that **splits into two lanes**, a bumper-filled **pinball plaza**, or a hidden **wormhole** shortcut beside the rail.
+- **A run** crosses 4 planets (Meadow first, Space last, two of Candy/Frozen/Clockwork in between): 3 procedurally generated holes, then a **boss hole**, then a **Wishing Green** rest stop. That makes 19 stages. Holes get longer, narrower and busier the deeper you go: curved bends and 45° diagonals, ramps, humps, dips and terraces, spinners, sliding gates, windmills, water beside open edges, ice, conveyors, plus each planet's signature hazards. Every hole has a **personality** (Classic, Fork, Switchback, Long Drive, Summit, Waterworks, Gauntlet, Pinball), so neighbouring holes play differently. Some holes have a **special**: a **forked fairway** whose two lanes split far apart round a lagoon (one steady, one quick but risky: a narrow bridge, a jump, speed pads or ice along the water, machinery), a **brook** you cross on narrow bridges, a **pond** in the middle of a wide green (go round, or brave the plank), a kicker-ramp **jump**, **split lanes**, a **pinball plaza**, or a hidden **wormhole**. Each **boss** has its planet's set piece and heaviest machinery, with a stingier par.
 - **Hearts** are the team's shared life. Each player's result moves them: birdie +1, ace +2, bogey −1 … picked up −3. A teammate's birdie covers your bogey. At 0 hearts the run ends.
 - **Forks:** after each hole you choose (or vote on, in co-op) the next hole. Every route shows its **reward** (Picnic heal, Stardust, Trinket, Vitality, Mystery Box), its par, and its **omen**: Gale wind, Slick Greens, Heavy Ball, Tiny Cup, Fog Bank, Moon Gravity or Short Fuse. Votes auto-resolve after 25 s; ties go to the earliest vote.
-- **Trinkets** last the whole run, for example Magnet Cup, Power Glove, Mulligan Moth, Gimme Clover, Bank Shot Badge, Bogey Shield and Birdie Feeder (12 in all). Bosses and trinket routes let you pick 1 of 3. Drafts also offer **level-ups** of trinkets you already have (Lv1 → Lv3, e.g. Magnet Cup 35% → 50% → 65% wider cups; Storm Compass Lv3 cancels omens). Levels only last for the run; two co-op players with the same keepsake start with it at Lv2.
+- **Trinkets** last the whole run, for example Magnet Cup, Power Glove, Mulligan Moth, Gimme Clover, Bank Shot Badge, Bogey Shield and Birdie Feeder (12 in all). Bosses and trinket routes let you pick 1 of 3. Drafts also offer **level-ups** of trinkets you already have, each level rarer than the last (Lv1 → Lv3, e.g. Magnet Cup 35% → 50% → 65% wider cups; Storm Compass Lv3 cancels omens). Levels only last for the run; two co-op players with the same keepsake start with it at Lv2.
 - **Wishing Green** (rest stop): no hearts at stake and +1 heart on arrival. Putt into the labelled crate holding the reward you want; sinking the cup instead takes a small stardust tip.
 - **The Clubhouse:** stardust from every run, won or lost, is banked there and spent on permanent upgrades (extra hearts, Second Wind, rerolls, wider trinket drafts, more stardust, a third route at forks). Trinkets you have found become **keepsakes**: equip one to start runs with it. In co-op, every player's keepsake joins the team, and the host's upgrades apply.
 
@@ -133,6 +133,17 @@ The key idea: **the same `Match` + `Simulation` code runs in the browser for sol
 5. Add the event type to `MatchEventSchema` in `protocol.ts` if you added one, and write a test in `shared/test/sim.test.ts`.
 
 ## Downloadable apps (Mac, Windows, iPhone)
+
+**Download builds** from the [Releases page](https://github.com/MaybeRaph/putt-putt-planet/releases): the newest release is at the top.
+
+### Previous builds
+
+| Version | What changed | Download |
+| ------- | ------------ | -------- |
+| v1.4.0 | Hole personalities, forked fairways round lagoons, brooks and ponds, more elevation, tougher bosses, rarer trinket levels, Ultra graphics, lower memory use | [v1.4.0](https://github.com/MaybeRaph/putt-putt-planet/releases/tag/v1.4.0) |
+| v1.3.0 | Curves, ramps, jumps, split lanes, trinket levels, Windows fullscreen, fixes | [v1.3.0](https://github.com/MaybeRaph/putt-putt-planet/releases/tag/v1.3.0) |
+
+**Building them yourself:**
 
 ```bash
 npm run desktop:mac

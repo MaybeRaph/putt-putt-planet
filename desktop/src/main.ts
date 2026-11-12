@@ -63,6 +63,7 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       backgroundThrottling: false,
+      spellcheck: false,
     },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {

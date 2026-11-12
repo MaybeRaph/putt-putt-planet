@@ -15,6 +15,7 @@
 | v1.1 graphics overhaul, 6 players, direct connection, desktop/iPhone packaging | ✅ done (see below) |
 | v1.2 Planet Hopper roguelike mode + Clubhouse hub | ✅ done (see below) |
 | v1.3 level variety, trinket levels, Windows fullscreen, fixes | ✅ done (see below) |
+| v1.4 hole personalities, forks, water, tougher bosses, Ultra graphics, memory | ✅ done (see below) |
 
 **Next steps (not started):** real accounts/auth; persist rooms across server restarts; switch the client to the non-`compat` Rapier build (separate .wasm, ~1 MB smaller download); optional outline pass; hand-tuned pars from playtesting with humans (current pars are designer estimates, sanity-checked by the solver).
 
@@ -58,6 +59,17 @@
 - Tests: 40 (physics, rules, progression, protocol, course data + solver spot-checks, lobby/room integration, latency interpolation). `npm run validate:courses` sweeps all 45 holes.
 - Bug bash fixes: Esc couldn't resume (controls disabled while paused); solo sim kept running while paused; three r187 shadow-map deprecation.
 - Production: vendor chunk split (app 94 KB gz, three 150 KB, rapier 1.67 MB), inline boot splash for instant first paint, single-process server (static + ws), path-traversal guarded, standalone server bundle verified from an empty dir. Dockerfile written (Docker not installed on the dev machine, so the image build itself is untested).
+
+## v1.4 — variety, water, bosses, graphics and memory (done)
+- **Hole personalities** (`holeArchetype` in `generate.ts`): classic, fork, switchback, long drive, summit, waterworks, gauntlet, pinball. Each tweaks leg count/length, width, special weights, hazard weights, corner rounding and the name. Stages walk a per-run shuffled deck three steps at a time, so neighbouring stages and the options of one route vote never share a personality.
+- **Forked fairways** (`buildFork`): a ring round a lagoon (lane centres 8–13 m apart, lanes 10–17 m long) made of two cross-bars, two lane fairways and island walls. One lane is steady (sand, pillar slalom, big hill, bumpers) and swings out further; the other is quick but risky (narrow open bridge, jump, speed pads or ice beside open water, machinery) and holds the gem. The path (camera, rescue, solver) follows the steady lane. Leg placement now checks footprints (capsules with half widths) instead of a 4 m cell grid.
+- **Water**: brooks crossing the fairway with one, two or a centre bridge; ponds in a wide green with an optional plank; lagoons inside forks; open-edge lanes. Water zones are kept clear of grass/trees.
+- **Elevation**: new valley (dip) and climb (two ramps with a terrace) specials, ramps weighted up, and the Summit personality.
+- **Bosses**: each planet's set piece (meadow brook + windmill, candy plaza, frozen pond, clockwork fork, space jump), planet heavy-machinery list, +20% machinery speed, extra open-water edges, narrower fairway, par = round(estimate − 1).
+- **Trinket levels are rarer**: draft weight by current level 1 / 0.4 / 0.12.
+- **Graphics/memory**: canvas has no MSAA backbuffer (it was wasted under post-processing); only the scene render target is multisampled; bloom at half res. High: 1.5× pixel ratio, 2048 shadows, half-res GTAO (was 2×, 4096, full res: well under half the GPU memory on a Retina screen, by estimate). New **Ultra** tier: 2× pixel ratio, 4096 shadows with soft edges, full-res GTAO, tilt-shift, denser grass and decor. High/Ultra add per-planet atmosphere motes (`Ambience.ts`, one draw call). Desktop disables the spellchecker.
+- Builder fix: a short segment beside a sharp turn could produce a zero-length (NaN) rail; such rails are now skipped.
+- Solver: progress along the path is capped at how far the ball actually moved (+1.5 m), so a ball parked beside a later leg behind a wall no longer looks like it is nearly at the cup (it got stuck in a fork corner next to the following leg).
 
 ## v1.3 — level variety and fixes (done)
 - Generator rewrite (`shared/src/hopper/generate.ts`): legs in 8 directions (±90° and ±45° turns), most corners rounded into arcs, and per-leg **specials**: ramps (±0.5/±0.9), humps, kicker **jumps** over a water gap (low gravity over long gaps / in space, sometimes a boost pad), **split lanes** (centre rail, a different feature in each lane), **pinball plazas**, and a **wormhole** shortcut on long holes. Per-planet hazard flavour (candy sticky, frozen ice, clockwork gates/movers). Zones/obstacles now take any heading (rotY) instead of assuming axis-aligned fairways. `fairway()` floor overlap at a joint is now `w/2·tan(θ/2)` so shallow arc joints don't poke out past the rails (90° corners unchanged).

@@ -143,6 +143,9 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
       const e = WALL_T / 2;
       a = [a[0] - s.dx * e, a[1], a[2] - s.dz * e];
       b = [b[0] + s.dx * e, b[1], b[2] + s.dz * e];
+      // A short segment beside a sharp turn: the inner mitre swallows it whole, and the
+      // neighbouring rails already close the corner.
+      if ((b[0] - a[0]) * s.dx + (b[2] - a[2]) * s.dz < 0.05) continue;
       out.push(beam(a, b, WALL_T, wallH + FLOOR_T, 'wall', 'grass', wallH));
     }
   }

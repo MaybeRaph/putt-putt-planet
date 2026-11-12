@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { holeArchetype } from '../src/hopper/generate';
+import { TRINKET_IDS } from '../src/hopper/defs';
 import {
   HopperMatch,
   SKELETON,
@@ -7,6 +9,7 @@ import {
   defaultProfile,
   initPhysics,
   mergeProfiles,
+  solveHole,
   parseS2C,
   stageHole,
   type HopperMatch as HM,
@@ -50,7 +53,19 @@ describe('Planet Hopper', () => {
     expect(m.lv('overtime')).toBe(3);
     expect(m.strokeLimit()).toBe(m.hole.par + 4 + 7);
     // Drafts offer level-ups of owned trinkets, never past Lv3.
-    for (const t of ['magnet', 'glove', 'moth', 'feeder', 'bank', 'clover', 'pouch', 'ironheart', 'shield', 'socks', 'compass'])
+    for (const t of [
+      'magnet',
+      'glove',
+      'moth',
+      'feeder',
+      'bank',
+      'clover',
+      'pouch',
+      'ironheart',
+      'shield',
+      'socks',
+      'compass',
+    ])
       p.addTrinket(t);
     const opts = p.trinketOptions();
     expect(opts.length).toBe(3);
@@ -68,6 +83,61 @@ describe('Planet Hopper', () => {
     expect(spec.shaping.filter((t) => t === 'magnet').length).toBe(3);
     expect(stageHole(5, 1, spec).cupScale).toBeCloseTo(1.65);
   });
+
+  it('offers each trinket level more rarely than the last', () => {
+    const m = new HopperMatch({ seed: 9, players: [players[0]], upgrades: {}, keepsakes: [] });
+    type Priv = {
+      addTrinket(t: string): void;
+      trinketOptions(): { trinket?: string; level?: number }[];
+      rerollsUsed: number;
+    };
+    const p = m as unknown as Priv;
+    p.addTrinket('magnet'); // Lv1: offered as a Lv2 level-up
+    p.addTrinket('glove');
+    p.addTrinket('glove'); // Lv2: offered as a Lv3 level-up
+    let lv2 = 0,
+      lv3 = 0,
+      fresh = 0;
+    for (let k = 0; k < 600; k++) {
+      p.rerollsUsed = k;
+      for (const o of p.trinketOptions()) {
+        if (o.trinket === 'magnet') lv2++;
+        else if (o.trinket === 'glove') lv3++;
+        else fresh++;
+      }
+    }
+    const perFresh = fresh / (TRINKET_IDS.length - 2);
+    expect(lv2).toBeLessThan(perFresh * 0.7);
+    expect(lv3).toBeLessThan(lv2 * 0.6);
+    expect(lv3).toBeGreaterThan(0);
+  });
+
+  it('builds varied holes: archetypes, forks round a lagoon, brooks and ponds', () => {
+    const arch = new Set<string>();
+    let fork: ReturnType<typeof stageHole> | null = null;
+    let brook = 0,
+      pond = 0;
+    for (let seed = 1; seed <= 12; seed++) {
+      const m = new HopperMatch({ seed: seed * 31, players: [players[0]], upgrades: {}, keepsakes: [] });
+      for (let i = 0; i < SKELETON.length; i++) {
+        const spec = m.makeSpec(i, null, null, seed % 3);
+        if (spec.kind === 'rest') continue;
+        const h = stageHole(m.seed, i, spec);
+        arch.add(holeArchetype(m.seed, i, spec));
+        if (h.tip?.includes('forks round') && spec.kind === 'hole') fork ??= h;
+        if (h.tip?.includes('brook')) brook++;
+        if (h.tip?.includes('pond')) pond++;
+      }
+    }
+    expect(arch.size).toBeGreaterThanOrEqual(7);
+    expect(brook).toBeGreaterThan(0);
+    expect(pond).toBeGreaterThan(0);
+    expect(fork).not.toBeNull();
+    // The two lanes of a fork are far apart: a lagoon (water) of at least 4 m sits between them.
+    const lagoon = fork!.zones.filter((z) => z.kind === 'water').map((z) => Math.min(z.size[0], z.size[2]));
+    expect(Math.max(...lagoon)).toBeGreaterThan(4);
+    expect(solveHole(fork!, { maxStrokes: fork!.par + 5, angles: 36 }).holed).toBe(true);
+  }, 120_000);
 
   it('generates the same hole for the same seed and spec', () => {
     const m = new HopperMatch({ seed: 42, players, upgrades: {}, keepsakes: [] });

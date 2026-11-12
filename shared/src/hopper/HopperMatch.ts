@@ -32,6 +32,8 @@ export interface HopperSetup {
 /** Trinkets that change the hole itself (baked into the generated geometry/physics). */
 const SHAPING: TrinketId[] = ['magnet', 'glove', 'socks', 'compass'];
 const VOTE_SECONDS = 25;
+/** Draft weight by current level: new trinket, level-up to Lv2, level-up to Lv3. */
+const LEVEL_UP_WEIGHT = [1, 0.4, 0.12, 0];
 const REST_REWARDS: RewardId[] = ['heal', 'dust', 'trinket', 'vitality', 'gamble'];
 
 /** World order for a run: meadow first, space last, two of the others in between. */
@@ -453,8 +455,8 @@ export class HopperMatch extends Match {
     const n = Math.min(pool.length, 3 + (this.rank('wide') > 0 ? 1 : 0));
     const out: ChoiceOption[] = [];
     while (out.length < n) {
-      // Rares are half as likely; level-ups a bit less likely than fresh trinkets.
-      const weights = pool.map((t) => (TRINKETS[t].rare ? 0.5 : 1) * (this.has(t) ? 0.8 : 1));
+      // Rares are half as likely; each level is rarer than the last (Lv2 uncommon, Lv3 rare).
+      const weights = pool.map((t) => (TRINKETS[t].rare ? 0.5 : 1) * LEVEL_UP_WEIGHT[this.lv(t)]);
       let x = r() * weights.reduce((a, b) => a + b, 0);
       let k = 0;
       while ((x -= weights[k]) > 0) k++;

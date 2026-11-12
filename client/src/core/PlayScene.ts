@@ -121,8 +121,8 @@ export class PlayScene {
     const hole = course.holes[idx];
     const theme = hole.theme ?? course.theme;
     this.view = new CourseView(hole, theme, {
-      decorDensity: this.game.settings.quality === 'low' ? 0.5 : 1,
-      grass: { low: 0, medium: 16000, high: 45000 }[this.game.settings.quality],
+      decorDensity: { low: 0.5, medium: 1, high: 1, ultra: 1.3 }[this.game.settings.quality],
+      grass: { low: 0, medium: 16000, high: 40000, ultra: 70000 }[this.game.settings.quality],
       ownedItems: this.game.profile.ownedCollectibles(),
     });
     this.view.syncItems(this.session.activeItems());

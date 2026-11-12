@@ -1070,6 +1070,7 @@ export class Screens {
           ['low', 'Low (mobile)'],
           ['medium', 'Medium'],
           ['high', 'High'],
+          ['ultra', 'Ultra'],
         ]),
         toggle('Show FPS', 'showFps'),
         h('h3', {}, 'Accessibility'),

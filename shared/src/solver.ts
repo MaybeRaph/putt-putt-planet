@@ -67,6 +67,10 @@ export function solveHole(
   let tick = 0;
   const shots: SolveResult['shots'] = [];
   const total = progressAlong(hole.path, hole.cup).total;
+  // A shot can't advance along the path much further than the ball actually moved, so a ball
+  // that stops beside a later leg (behind a wall) isn't scored as having got there.
+  const reach = (from: Vec3, to: Vec3) => Math.hypot(to[0] - from[0], to[2] - from[2]) + 1.5;
+  let along = 0;
   for (let s = 1; s <= maxStrokes; s++) {
     let best: { score: number; angle: number; power: number; r: ShotResult } | null = null;
     const toCup = Math.atan2(hole.cup[2] - pos[2], hole.cup[0] - pos[0]);
@@ -82,7 +86,7 @@ export function solveHole(
         score = 1e6 - power; // prefer the softest holing shot
       else if (r.hazard) score = -1e6;
       else {
-        const pr = progressAlong(hole.path, r.pos);
+        const pr = progressAlong(hole.path, r.pos, along + reach(pos, r.pos));
         score =
           pr.along -
           pr.dist * 0.5 -
@@ -93,6 +97,7 @@ export function solveHole(
     }
     shots.push({ angle: best!.angle, power: best!.power, pos: best!.r.pos });
     if (best!.r.holed) return { strokes: s, holed: true, shots };
+    along = progressAlong(hole.path, best!.r.pos, along + reach(pos, best!.r.pos)).along;
     pos = best!.r.pos;
     tick = best!.r.tick;
   }

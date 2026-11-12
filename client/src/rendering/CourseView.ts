@@ -74,6 +74,15 @@ export class CourseView {
       const bb = computeBounds([s]);
       return { x0: bb.min[0], z0: bb.min[2], x1: bb.max[0], z1: bb.max[2] };
     });
+    // Ponds and lagoons too, so grass and trees don't poke through the water.
+    for (const z of hole.zones) {
+      if (z.kind !== 'water') continue;
+      const c = Math.abs(Math.cos(z.rotY)),
+        s = Math.abs(Math.sin(z.rotY));
+      const hx = (c * z.size[0] + s * z.size[2]) / 2,
+        hz = (s * z.size[0] + c * z.size[2]) / 2;
+      keepOut.push({ x0: z.center[0] - hx, z0: z.center[2] - hz, x1: z.center[0] + hx, z1: z.center[2] + hz });
+    }
     // Keep the camera's usual spot behind the tee clear of trees.
     const t0 = hole.tee,
       t1 = hole.path[1] ?? hole.cup;

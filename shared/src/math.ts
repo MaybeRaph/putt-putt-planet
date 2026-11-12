@@ -140,8 +140,16 @@ export function inYawBox(p: Vec3, center: Vec3, size: Vec3, rotY: number): boole
   );
 }
 
-/** Project p onto polyline path, returning distance along it (XZ, used for progress metrics). */
-export function progressAlong(path: Vec3[], p: Vec3): { along: number; dist: number; total: number } {
+/**
+ * Project p onto polyline path, returning distance along it (XZ, used for progress metrics).
+ * `maxAlong` ignores path stretches that start beyond it (a ball beside a later leg, behind a
+ * wall, hasn't really got that far).
+ */
+export function progressAlong(
+  path: Vec3[],
+  p: Vec3,
+  maxAlong = Infinity,
+): { along: number; dist: number; total: number } {
   let best = Infinity;
   let bestAlong = 0;
   let acc = 0;
@@ -151,6 +159,10 @@ export function progressAlong(path: Vec3[], p: Vec3): { along: number; dist: num
     const abx = b[0] - a[0],
       abz = b[2] - a[2];
     const segLen = Math.hypot(abx, abz) || 1e-6;
+    if (acc > maxAlong) {
+      acc += segLen;
+      continue;
+    }
     let t = ((p[0] - a[0]) * abx + (p[2] - a[2]) * abz) / (segLen * segLen);
     t = clamp(t, 0, 1);
     const qx = a[0] + abx * t,
