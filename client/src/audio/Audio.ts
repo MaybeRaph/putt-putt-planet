@@ -1,8 +1,12 @@
 import type { Theme } from '@ppp/shared';
 import { Music } from './Music';
+// A real putter strike (CC0: "putt.wav" by 170129 on freesound.org, sound 408260), inlined as a
+// data URL so it loads the same way in the browser, the desktop app and on phones.
+import puttWav from './putt.wav?inline';
 
 /**
- * WebAudio engine. Every sound is synthesised at runtime: no asset files.
+ * WebAudio engine. Almost every sound is synthesised at runtime; the putter strike is a short
+ * recording (with a synthesised fallback until it has decoded).
  * Bus layout: sfx + music + ambience -> master -> compressor -> destination.
  */
 export class AudioEngine {
@@ -16,6 +20,7 @@ export class AudioEngine {
   private pickupStreak = 0;
   private lastPickup = 0;
   private lastWall = 0;
+  private puttBuf: AudioBuffer | null = null;
 
   /** Must be called from a user gesture (browsers block autoplay). */
   unlock(): void {
@@ -43,6 +48,12 @@ export class AudioEngine {
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this.music = new Music(this.ctx, this.musicBus, this.noiseBuf);
+    const ctx = this.ctx;
+    void fetch(puttWav)
+      .then((r) => r.arrayBuffer())
+      .then((b) => ctx.decodeAudioData(b))
+      .then((buf) => (this.puttBuf = buf))
+      .catch(() => undefined);
     this.setVolumes(this.vol.master, this.vol.music, this.vol.sfx);
   }
 
@@ -116,6 +127,20 @@ export class AudioEngine {
   // ------------------------------------------------------------------------------------------
 
   putt(power: number): void {
+    if (this.ctx && this.puttBuf) {
+      // The recorded "tock": louder and a touch brighter the harder you hit, with a little
+      // variation so repeated putts don't sound identical.
+      const t = this.ctx.currentTime;
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.puttBuf;
+      src.playbackRate.value = 0.92 + power * 0.16 + (Math.random() - 0.5) * 0.04;
+      const g = this.ctx.createGain();
+      g.gain.value = 0.45 + power * 0.85;
+      src.connect(g).connect(this.sfxBus);
+      src.start(t);
+      if (power > 0.7) this.tone(110, 0.1, 'sine', (power - 0.7) * 0.8, { slide: 0.6 });
+      return;
+    }
     this.noise(0.05, 0.5 + power * 0.4, 'bandpass', 2400 + power * 1500, { q: 2 });
     this.tone(180 + power * 120, 0.12, 'sine', 0.5, { slide: 0.5 });
     this.tone(900, 0.04, 'triangle', 0.2);

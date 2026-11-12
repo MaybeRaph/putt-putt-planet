@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 /**
  * Smooth orbit camera around the ball. Yaw is the direction the camera looks along (0 = +X),
- * so "aim straight ahead" = camera yaw. Raycast pullback keeps it out of walls; an overview
+ * so "aim straight ahead" = camera yaw. It passes through walls (they fade instead); an overview
  * mode frames the whole hole from above.
  */
 export class CameraRig {
@@ -17,7 +17,6 @@ export class CameraRig {
   overview = false;
   private overviewBlend = 0;
   private shakeAmp = 0;
-  private readonly ray = new THREE.Raycaster();
   bounds: { min: THREE.Vector3; max: THREE.Vector3 } | null = null;
   reducedMotion = false;
   /** Height boost while the ball is in the air / flying (keeps it in frame). */
@@ -50,7 +49,7 @@ export class CameraRig {
     this.shakeAmp = Math.min(0.35, this.shakeAmp + amount);
   }
 
-  update(dt: number, follow: THREE.Vector3, colliders: THREE.Object3D[]): void {
+  update(dt: number, follow: THREE.Vector3): void {
     this.target.copy(follow);
     const k = 1 - Math.exp(-dt * 7);
     this.sTarget.lerp(this.target, 1 - Math.exp(-dt * 9));
@@ -65,15 +64,9 @@ export class CameraRig {
     const dir = new THREE.Vector3(-Math.cos(this.sYaw) * cp, sp, -Math.sin(this.sYaw) * cp);
     const look = this.sTarget.clone().add(new THREE.Vector3(0, 0.25, 0));
 
-    // Pull the camera in front of walls between the ball and the camera.
-    let d = this.sDist;
-    if (colliders.length) {
-      this.ray.set(look, dir);
-      this.ray.far = d;
-      const hit = this.ray.intersectObjects(colliders, false)[0];
-      if (hit) d = Math.max(0.8, hit.distance - 0.25);
-    }
-    const follow3 = look.clone().addScaledVector(dir, d);
+    // The camera passes straight through rails and obstacles (the course fades whatever is in
+    // the way, see CourseView.updateOcclusion), so the view never lurches in towards the ball.
+    const follow3 = look.clone().addScaledVector(dir, this.sDist);
 
     this.overviewBlend += ((this.overview ? 1 : 0) - this.overviewBlend) * (1 - Math.exp(-dt * 4));
     if (this.overviewBlend > 0.001 && this.bounds) {

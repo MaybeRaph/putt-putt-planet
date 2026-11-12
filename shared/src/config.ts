@@ -7,7 +7,7 @@ export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
 export const SNAPSHOT_RATE = 20; // Hz, server -> client ball state
 
-export type SurfaceKind = 'grass' | 'sand' | 'ice' | 'sticky' | 'rubber' | 'metal' | 'candy';
+export type SurfaceKind = 'grass' | 'sand' | 'ice' | 'sticky' | 'rubber' | 'metal' | 'candy' | 'frost';
 
 export interface SurfaceParams {
   /** Constant deceleration (units/s^2) while touching the ground: rolling resistance. */
@@ -67,6 +67,8 @@ export const SURFACES: Record<SurfaceKind, SurfaceParams> = {
   sand: { rolling: 6.0, drag: 2.2, restitution: 0.02, settle: 2.2 },
   sticky: { rolling: 4.5, drag: 3.6, restitution: 0.0, settle: 2.5 },
   ice: { rolling: 0.12, drag: 0.04, restitution: 0.1, settle: 0.6 },
+  /** Frosted green (Slick Greens softened by the Storm Compass): slippery, but not glass. */
+  frost: { rolling: 0.36, drag: 0.1, restitution: 0.11, settle: 0.8 },
 };
 
 export const RULES = {

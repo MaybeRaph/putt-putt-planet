@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { DT, PHYSICS, SURFACES, type SurfaceKind } from '../config';
 import type { Collectible, Hole, Obstacle, Solid, Vec3, Zone } from '../schema';
-import { clamp, dirVec, distXZ, inYawBox, quatFromEuler, ribbonEdges, rotateVec } from '../math';
+import { clamp, dirVec, distXZ, domeSphere, inYawBox, quatFromEuler, rotateVec, solidRibbon } from '../math';
 import { kinematicParts, obstaclePose, obstacleSolids } from './obstacles';
 
 let ready: Promise<void> | null = null;
@@ -63,7 +63,8 @@ interface BallInternal {
   lipCooldown: number;
   teleCooldown: number;
   inBoost: boolean;
-  inSpring: boolean;
+  /** Already launched by the spring pad it is on (cleared once it leaves the pad). */
+  springFired: boolean;
   sinkT: number;
   sinkFrom: Vec3;
   /** Scripted ride through a loop-the-loop. */
@@ -147,11 +148,16 @@ export class Simulation {
   // ------------------------------------------------------------------------------------------
 
   private addStatic(s: Solid, obstacle?: Obstacle): void {
-    const ribbon = s.shape === 'ribbon' && s.path;
-    const desc = ribbon ? ribbonColliderDesc(s.path!, s.size[2]) : solidColliderDesc(s.shape as 'box', s.size);
-    const q = ribbon ? [0, 0, 0, 1] : quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
+    const ribbon = s.shape === 'ribbon';
+    const dome = s.shape === 'dome' ? domeSphere(s.center, s.size) : null;
+    const desc = ribbon
+      ? ribbonColliderDesc(s)
+      : dome
+        ? RAPIER.ColliderDesc.ball(dome.r)
+        : solidColliderDesc(s.shape as 'box', s.size);
+    const q = ribbon || dome ? [0, 0, 0, 1] : quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
     desc
-      .setTranslation(...((ribbon ? [0, 0, 0] : s.center) as [number, number, number]))
+      .setTranslation(...((ribbon ? [0, 0, 0] : dome ? dome.c : s.center) as [number, number, number]))
       .setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] })
       .setFriction(0)
       .setRestitution(s.restitution ?? defaultRestitution(s.role, s.surface))
@@ -227,7 +233,7 @@ export class Simulation {
       lipCooldown: 0,
       teleCooldown: 0,
       inBoost: false,
-      inSpring: false,
+      springFired: false,
       sinkT: 0,
       sinkFrom: [...p],
       loop: null,
@@ -333,7 +339,7 @@ export class Simulation {
     b.state.lastRest = [...pos];
     b.slowTime = 0;
     b.inBoost = false;
-    b.inSpring = false;
+    b.springFired = false;
   }
 
   /** Remove a ball from play (picked up after hitting the stroke limit). */
@@ -457,9 +463,13 @@ export class Simulation {
         if (!b.inBoost) this.events.push({ type: 'boost', ball: s.id });
       } else if (z.kind === 'spring') {
         sprung = true;
-        // Launch pad: pops a rolling ball straight up (once per visit), keeping its pace.
-        if (!b.inSpring && ground && v[1] < z.strength) {
+        // Launch pad: pops a rolling ball straight up (once per visit), keeping its pace. A ball
+        // that hops onto the pad still gets launched as soon as it touches down on it.
+        const padTop = z.center[1] - z.size[1] / 2 + 0.05;
+        const low = pos[1] - padTop < PHYSICS.ballRadius + 0.14 && v[1] < 1.2;
+        if (!b.springFired && (ground || low) && v[1] < z.strength) {
           v = [v[0], z.strength, v[2]];
+          b.springFired = true;
           this.events.push({ type: 'boost', ball: s.id });
         }
       } else if (z.kind === 'oneWay') {
@@ -472,7 +482,7 @@ export class Simulation {
       }
     }
     b.inBoost = boosted;
-    b.inSpring = sprung;
+    if (!sprung) b.springFired = false;
     s.surface = surface;
     s.grounded = !!ground;
     b.body.setGravityScale(gravity, true);
@@ -751,6 +761,7 @@ export class Simulation {
     b.state.vel = [0, 0, 0];
     b.state.phase = 'rest';
     b.slowTime = 0;
+    b.springFired = false;
   }
 
   /** Water and out-of-bounds: reset to the last rest spot. Returns true if a reset happened. */
@@ -793,13 +804,14 @@ function solidColliderDesc(shape: 'box' | 'cylinder', size: Vec3): RAPIER.Collid
 }
 
 /** Top surface of a ribbon as a triangle mesh (internal edges smoothed so seams can't kick). */
-function ribbonColliderDesc(path: Vec3[], width: number): RAPIER.ColliderDesc {
-  const { left, right } = ribbonEdges(path, width);
-  const v = new Float32Array(path.length * 6);
+function ribbonColliderDesc(s: Solid): RAPIER.ColliderDesc {
+  const { left, right } = solidRibbon(s);
+  const n = left.length;
+  const v = new Float32Array(n * 6);
   left.forEach((p, i) => v.set(p, i * 6));
   right.forEach((p, i) => v.set(p, i * 6 + 3));
   const idx: number[] = [];
-  for (let i = 0; i < path.length - 1; i++) {
+  for (let i = 0; i < n - 1; i++) {
     const l0 = i * 2,
       r0 = i * 2 + 1,
       l1 = i * 2 + 2,
@@ -818,8 +830,18 @@ export function computeBounds(solids: Solid[]): { min: Vec3; max: Vec3 } {
   const min: Vec3 = [Infinity, Infinity, Infinity];
   const max: Vec3 = [-Infinity, -Infinity, -Infinity];
   for (const s of solids) {
-    if (s.shape === 'ribbon' && s.path) {
-      const { left, right } = ribbonEdges(s.path, s.size[2]);
+    if (s.shape === 'dome') {
+      const a = s.size[0] / 2;
+      for (let i = 0; i < 3; i++) {
+        const lo = i === 1 ? s.center[1] - 0.05 : s.center[i] - a;
+        const hi = i === 1 ? s.center[1] + s.size[1] : s.center[i] + a;
+        min[i] = Math.min(min[i], lo);
+        max[i] = Math.max(max[i], hi);
+      }
+      continue;
+    }
+    if (s.shape === 'ribbon') {
+      const { left, right } = solidRibbon(s);
       for (const p of [...left, ...right])
         for (const dy of [0, -s.size[1]])
           for (let i = 0; i < 3; i++) {

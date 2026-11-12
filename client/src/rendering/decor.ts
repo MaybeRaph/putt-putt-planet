@@ -263,23 +263,16 @@ const BACKDROP_COLOR: Record<Kit, string> = {
   space: '',
 };
 
-export interface Rect2 {
-  x0: number;
-  z0: number;
-  x1: number;
-  z1: number;
-}
-
 /**
  * Build all decor (authored + scattered) for a hole as instanced meshes.
- * `keepOut` are XZ rectangles (course footprint) where nothing is placed.
+ * `keepOut(x, z, margin)` is true within `margin` of the course footprint (nothing goes there).
  */
 export function buildDecor(
   holeId: string,
   kit: Kit,
   authored: Decor[],
   bounds: { min: THREE.Vector3; max: THREE.Vector3 },
-  keepOut: Rect2[],
+  keepOut: (x: number, z: number, margin: number) => boolean,
   groundY: number,
   density = 1,
   heightAt: (x: number, z: number) => number = () => groundY,
@@ -295,8 +288,7 @@ export function buildDecor(
       color: d.color,
     });
 
-  const blocked = (x: number, z: number, margin: number) =>
-    keepOut.some((k) => x > k.x0 - margin && x < k.x1 + margin && z > k.z0 - margin && z < k.z1 + margin);
+  const blocked = keepOut;
   const cx = (bounds.min.x + bounds.max.x) / 2,
     cz = (bounds.min.z + bounds.max.z) / 2;
   const rx = (bounds.max.x - bounds.min.x) / 2,

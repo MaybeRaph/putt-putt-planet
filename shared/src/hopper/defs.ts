@@ -82,9 +82,9 @@ export const TRINKETS: Record<TrinketId, TrinketDef> = {
     '🍀',
     'Gimme Clover',
     [
-      'A ball resting within a putter length of the cup drops in (+1 stroke).',
-      'Gimme range grows by half.',
-      'Gimme range is doubled.',
+      'A ball that stops within 0.9 m of the cup drops in for free.',
+      'Gimme range grows to 1.3 m.',
+      'Gimme range grows to 1.7 m.',
     ],
     true,
   ),
@@ -152,7 +152,7 @@ export const REWARDS: Record<RewardId, { id: RewardId; icon: string; name: strin
   dust: { id: 'dust', icon: '✨', name: 'Stardust Cache', desc: '+12 stardust.' },
   trinket: { id: 'trinket', icon: '🎁', name: 'Trinket', desc: 'Choose 1 of 3 trinkets.' },
   vitality: { id: 'vitality', icon: '💖', name: 'Vitality', desc: '+1 max heart and heal 1.' },
-  gamble: { id: 'gamble', icon: '🎲', name: 'Mystery Box', desc: 'A random rare trinket… or 25 stardust.' },
+  gamble: { id: 'gamble', icon: '🎲', name: 'Mystery Box', desc: 'Maybe a rare trinket… or 25 stardust.' },
 };
 
 /** Permanent Clubhouse upgrades bought with stardust. */

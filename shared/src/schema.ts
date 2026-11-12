@@ -12,11 +12,14 @@ export const Vec2Schema = z.tuple([num, num]);
 export type Vec3 = z.infer<typeof Vec3Schema>;
 export type Vec2 = z.infer<typeof Vec2Schema>;
 
-export const SurfaceSchema = z.enum(['grass', 'sand', 'ice', 'sticky', 'rubber', 'metal', 'candy']);
+export const SurfaceSchema = z.enum(['grass', 'sand', 'ice', 'sticky', 'rubber', 'metal', 'candy', 'frost']);
 
 export const SolidSchema = z.object({
-  /** ribbon: a smooth strip along `path` (slides, spirals); size = [unused, thickness, width]. */
-  shape: z.enum(['box', 'cylinder', 'ribbon']),
+  /**
+   * ribbon: a smooth strip along `path` (slides, spirals, curves); size = [unused, thickness, width].
+   * dome: a low mound; center = middle of its base on the floor, size = [diameter, height, diameter].
+   */
+  shape: z.enum(['box', 'cylinder', 'ribbon', 'dome']),
   /** floor: walkable, checker-rendered. wall: rail. block: solid obstacle. */
   role: z.enum(['floor', 'wall', 'block']),
   center: Vec3Schema,
@@ -31,6 +34,9 @@ export const SolidSchema = z.object({
   skirt: z.boolean().optional(),
   /** Ribbon centreline (top surface). */
   path: z.array(Vec3Schema).optional(),
+  /** Ribbon edge lines (top surface), when the strip isn't a plain centreline widened. */
+  left: z.array(Vec3Schema).optional(),
+  right: z.array(Vec3Schema).optional(),
 });
 export type Solid = z.infer<typeof SolidSchema>;
 

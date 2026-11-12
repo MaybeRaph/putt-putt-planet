@@ -32,8 +32,12 @@ export interface HopperSetup {
 /** Trinkets that change the hole itself (baked into the generated geometry/physics). */
 const SHAPING: TrinketId[] = ['magnet', 'glove', 'socks', 'compass'];
 const VOTE_SECONDS = 25;
+/** Gimme Clover reach by level (metres from the cup a resting ball drops in for free). */
+export const GIMME_RANGE = [0, 0.9, 1.3, 1.7];
 /** Draft weight by current level: new trinket, level-up to Lv2, level-up to Lv3. */
 const LEVEL_UP_WEIGHT = [1, 0.4, 0.12, 0];
+/** Draft weight of a rare trinket relative to a common one. */
+const RARE_WEIGHT = 0.25;
 const REST_REWARDS: RewardId[] = ['heal', 'dust', 'trinket', 'vitality', 'gamble'];
 
 /** World order for a run: meadow first, space last, two of the others in between. */
@@ -52,10 +56,10 @@ export function stageDepth(index: number): number {
 
 /**
  * Team-size balance. Hearts are shared, but each player's result moves them, so a bigger team
- * swings the pool harder; three players is the reference. A solo run gets a smaller pool and
- * smaller picnics so it is about as hard to finish as a three-player run.
+ * swings the pool harder. The pools are tuned (with a model of whole runs at the v1.6 pars) so
+ * an average team of any size finishes roughly a third of its runs.
  */
-const TEAM_HEARTS = [4, 7, 10, 12, 14, 16];
+const TEAM_HEARTS = [3, 6, 12, 16, 22, 27];
 const PICNIC_HEAL = [1, 2, 2, 3, 3, 4];
 const SECOND_WIND = [2, 3, 3, 4, 4, 5];
 const byTeam = (table: number[], n: number) => table[Math.max(0, Math.min(table.length, n) - 1)];
@@ -206,8 +210,16 @@ export class HopperMatch extends Match {
     const b = this.sim.getBall(e);
     if (!b) return false;
     const cup = this.hole.cup;
-    const reach = [0, 0.55, 0.8, 1.05][this.lv('clover')];
-    return Math.hypot(b.pos[0] - cup[0], b.pos[2] - cup[2]) < reach && Math.abs(b.pos[1] - cup[1]) < 0.4;
+    const reach = GIMME_RANGE[this.lv('clover')];
+    const d = Math.hypot(b.pos[0] - cup[0], b.pos[2] - cup[2]);
+    if (d >= reach || Math.abs(b.pos[1] - cup[1]) > 0.45) return false;
+    this.note('🍀 Gimme! It drops in for free', 'good');
+    return true;
+  }
+
+  /** The clover's tap-in is free: the ball just drops in. */
+  protected override gimmeStrokes(): number {
+    return 0;
   }
 
   protected override holedStrokes(e: string, strokes: number): number {
@@ -283,7 +295,7 @@ export class HopperMatch extends Match {
       case 'gamble': {
         const r = rng(hashString(`gamble:${this.seed}:${this.hs.stage}`));
         const rares = TRINKET_IDS.filter((t) => TRINKETS[t].rare && !this.has(t));
-        if (rares.length && r() < 0.6) this.addTrinket(rares[Math.floor(r() * rares.length)]);
+        if (rares.length && r() < 0.4) this.addTrinket(rares[Math.floor(r() * rares.length)]);
         else {
           this.hs.dust += 25;
           this.note('🎲 Mystery box: +25 stardust', 'good');
@@ -435,7 +447,7 @@ export class HopperMatch extends Match {
         ['dust', 1],
         ['trinket', 0.9],
         ['vitality', 0.25],
-        ['gamble', 0.3],
+        ['gamble', 0.2],
       ];
       const avail = weights.filter(([id]) => !used.has(id));
       const total = avail.reduce((a, [, w]) => a + w, 0);
@@ -470,8 +482,8 @@ export class HopperMatch extends Match {
     const n = Math.min(pool.length, 3 + (this.rank('wide') > 0 ? 1 : 0));
     const out: ChoiceOption[] = [];
     while (out.length < n) {
-      // Rares are half as likely; each level is rarer than the last (Lv2 uncommon, Lv3 rare).
-      const weights = pool.map((t) => (TRINKETS[t].rare ? 0.5 : 1) * LEVEL_UP_WEIGHT[this.lv(t)]);
+      // Rares turn up a quarter as often; each level is rarer than the last (Lv2 uncommon, Lv3 rare).
+      const weights = pool.map((t) => (TRINKETS[t].rare ? RARE_WEIGHT : 1) * LEVEL_UP_WEIGHT[this.lv(t)]);
       let x = r() * weights.reduce((a, b) => a + b, 0);
       let k = 0;
       while ((x -= weights[k]) > 0) k++;

@@ -17,8 +17,12 @@ export interface Cosmetic {
   color: string;
   color2?: string;
   pattern?: 'solid' | 'stripes' | 'dots' | 'star' | 'half' | 'rainbow' | 'galaxy' | 'swirl';
+  /** Putters: head style (looks only; every putter plays the same). */
+  shape?: PutterShape;
   unlock: Unlock;
 }
+
+export type PutterShape = 'blade' | 'mallet' | 'fang' | 'hammer' | 'hockey' | 'flamingo' | 'cane' | 'star' | 'rocket';
 
 const C = (
   id: string,
@@ -26,7 +30,7 @@ const C = (
   name: string,
   color: string,
   unlock: Unlock,
-  extra: Partial<Pick<Cosmetic, 'color2' | 'pattern'>> = {},
+  extra: Partial<Pick<Cosmetic, 'color2' | 'pattern' | 'shape'>> = {},
 ): Cosmetic => ({ id, slot, name, color, unlock, ...extra });
 
 const def: Unlock = { type: 'default' };
@@ -67,14 +71,19 @@ export const COSMETICS: Cosmetic[] = [
   }),
   C('trail.fire', 'trail', 'Fireball', '#ff6d00', lvl(8), { color2: '#ffd600' }),
   C('trail.toxic', 'trail', 'Toxic', '#76ff03', crate, { color2: '#00e676' }),
-  // Putters
-  C('putter.classic', 'putter', 'Classic', '#b0bec5', def),
-  C('putter.wood', 'putter', 'Driftwood', '#a1887f', lvl(3)),
-  C('putter.neon', 'putter', 'Neon', '#18ffff', shop(150), { color2: '#ff4081' }),
-  C('putter.flamingo', 'putter', 'Flamingo', '#ff80ab', crate, { color2: '#ffffff' }),
-  C('putter.hammer', 'putter', 'Mallet', '#8d6e63', ach('bank_shot'), { color2: '#ffca28' }),
-  C('putter.gold', 'putter', 'Golden Putter', '#ffc400', shop(600), { color2: '#fff59d' }),
-  C('putter.cane', 'putter', 'Candy Cane', '#ffffff', lvl(6), { color2: '#ff1744', pattern: 'stripes' }),
+  // Putters (looks only: every putter plays the same)
+  C('putter.classic', 'putter', 'Classic Blade', '#b0bec5', def, { shape: 'blade' }),
+  C('putter.mallet', 'putter', 'Moon Mallet', '#37474f', def, { color2: '#ffd23f', shape: 'mallet' }),
+  C('putter.fang', 'putter', 'Twin Fang', '#e53935', lvl(2), { color2: '#263238', shape: 'fang' }),
+  C('putter.wood', 'putter', 'Driftwood', '#a1887f', lvl(3), { shape: 'blade' }),
+  C('putter.hockey', 'putter', 'Hockey Stick', '#1565c0', lvl(4), { color2: '#ffffff', shape: 'hockey' }),
+  C('putter.cane', 'putter', 'Candy Cane', '#ffffff', lvl(6), { color2: '#ff1744', pattern: 'stripes', shape: 'cane' }),
+  C('putter.rocket', 'putter', 'Rocket', '#eceff1', lvl(8), { color2: '#ff5252', shape: 'rocket' }),
+  C('putter.neon', 'putter', 'Neon', '#18ffff', shop(150), { color2: '#ff4081', shape: 'fang' }),
+  C('putter.star', 'putter', 'Star Wand', '#7c4dff', shop(220), { color2: '#ffeb3b', shape: 'star' }),
+  C('putter.gold', 'putter', 'Golden Putter', '#ffc400', shop(600), { color2: '#fff59d', shape: 'mallet' }),
+  C('putter.flamingo', 'putter', 'Flamingo', '#ff80ab', crate, { color2: '#ffffff', shape: 'flamingo' }),
+  C('putter.hammer', 'putter', 'Croquet Mallet', '#8d6e63', ach('bank_shot'), { color2: '#ffca28', shape: 'hammer' }),
   // Hats
   C('hat.none', 'hat', 'No Hat', '#000000', def),
   C('hat.cap', 'hat', 'Ball Cap', '#1e88e5', def),

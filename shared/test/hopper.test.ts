@@ -205,7 +205,7 @@ describe('Planet Hopper', () => {
       upgrades: { vigor: 1 },
       keepsakes: ['magnet', 'magnet', 'nope'],
     });
-    expect(m.hs.maxHearts).toBe(7 + 1);
+    expect(m.hs.maxHearts).toBe(6 + 1);
     // Two players with the same keepsake: it stacks into a level 2 trinket.
     expect(m.hs.trinkets).toEqual(['magnet']);
     expect(m.hs.levels.magnet).toBe(2);
@@ -216,7 +216,7 @@ describe('Planet Hopper', () => {
     finishHole(m, (e) => (e === 'a' ? 1 : par + 2));
     expect(m.phase).toBe('holeEnd');
     expect(m.hs.lastDelta).toEqual({ by: { a: 2, b: -2 }, net: 0 });
-    expect(m.hs.hearts).toBe(8);
+    expect(m.hs.hearts).toBe(7);
     m.advance();
     const c = m.hs.choice!;
     expect(c.kind).toBe('route');
@@ -259,7 +259,7 @@ describe('Planet Hopper', () => {
         upgrades: {},
         keepsakes: [],
       });
-    expect([1, 2, 3, 4].map((n) => team(n).hs.maxHearts)).toEqual([4, 7, 10, 12]);
+    expect([1, 2, 3, 4].map((n) => team(n).hs.maxHearts)).toEqual([3, 6, 12, 16]);
     expect([1, 2, 3, 4].map((n) => picnicHeal(n))).toEqual([1, 2, 2, 3]);
   });
 

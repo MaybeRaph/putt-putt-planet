@@ -10,7 +10,12 @@ export const QUAT_ID: Quat = [0, 0, 0, 1];
  * the strip keeps its width round bends). Each cross-section is horizontal, so a turning, sloping
  * path makes a smooth helicoid with no seams.
  */
-export function ribbonEdges(path: Vec3[], width: number): { left: Vec3[]; right: Vec3[] } {
+export function ribbonEdges(
+  path: Vec3[],
+  width: number,
+  dir0?: number,
+  dir1?: number,
+): { left: Vec3[]; right: Vec3[] } {
   const n = path.length;
   const left: Vec3[] = [],
     right: Vec3[] = [];
@@ -28,12 +33,42 @@ export function ribbonEdges(path: Vec3[], width: number): { left: Vec3[]; right:
     const tl = Math.hypot(tx, tz) || 1;
     tx /= tl;
     tz /= tl;
-    const k = width / 2 / Math.max(0.5, tx * d1[0] + tz * d1[1]);
+    let k = width / 2 / Math.max(0.5, tx * d1[0] + tz * d1[1]);
+    // An end that meets a straight floor is cut square to that floor, so the two butt together
+    // with no wedge-shaped gap or overlap.
+    const end = i === 0 ? dir0 : i === n - 1 ? dir1 : undefined;
+    if (end !== undefined) {
+      tx = Math.cos(end);
+      tz = Math.sin(end);
+      k = width / 2;
+    }
     const p = path[i];
     left.push([p[0] - tz * k, p[1], p[2] + tx * k]);
     right.push([p[0] + tz * k, p[1], p[2] - tx * k]);
   }
   return { left, right };
+}
+
+/** Edges of a ribbon solid: explicit edge lines when it has them, else its centreline widened. */
+export function solidRibbon(s: {
+  path?: Vec3[];
+  left?: Vec3[];
+  right?: Vec3[];
+  size: Vec3;
+}): { left: Vec3[]; right: Vec3[] } {
+  if (s.left && s.right) return { left: s.left, right: s.right };
+  return ribbonEdges(s.path ?? [], s.size[2]);
+}
+
+/**
+ * A low mound (spherical cap) on the green: `center` is the middle of its base on the floor,
+ * `size` = [base diameter, height, base diameter]. Returns the sphere it is cut from.
+ */
+export function domeSphere(center: Vec3, size: Vec3): { c: Vec3; r: number } {
+  const a = size[0] / 2,
+    h = Math.max(0.01, size[1]);
+  const r = (a * a + h * h) / (2 * h);
+  return { c: [center[0], center[1] + h - r, center[2]], r };
 }
 
 /** Unit vector in the XZ plane for an angle (0 = +X, PI/2 = +Z). */

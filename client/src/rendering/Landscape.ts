@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import type { Theme } from '@ppp/shared';
 import { fbm, noise2, ridged, smoothstep } from './noise';
-import type { Rect2 } from './decor';
 
 type Kit = Theme['decorKit'];
 
@@ -21,7 +20,8 @@ export interface LandscapeOpts {
   groundY: number;
   kit: Kit;
   seed: number;
-  keepOut: Rect2[];
+  /** True if (x, z) is within `margin` of the course footprint. */
+  keepOut: (x: number, z: number, margin: number) => boolean;
   grass: number; // number of grass blades (0 = none)
 }
 
@@ -216,7 +216,7 @@ export class Landscape {
     const tint = new THREE.Color();
     let seed = this.o.seed + 101;
     const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    const blocked = (x: number, z: number) => keepOut.some((k) => x > k.x0 - 0.22 && x < k.x1 + 0.22 && z > k.z0 - 0.22 && z < k.z1 + 0.22);
+    const blocked = (x: number, z: number) => keepOut(x, z, 0.16);
     const extent = 18;
     let placed = 0;
     for (let tries = 0; placed < n && tries < n * 4; tries++) {

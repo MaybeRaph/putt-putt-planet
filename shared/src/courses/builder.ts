@@ -1,6 +1,6 @@
 import type { Collectible, CollectibleKind, Decor, HoleInput, Obstacle, Solid, Tunnel, Vec3, Zone } from '../schema';
 import type { SurfaceKind } from '../config';
-import { yawFor } from '../math';
+import { ribbonEdges, yawFor } from '../math';
 
 /**
  * Authoring helpers. A hole is usually one `fairway` (a centreline polyline that becomes floors,
@@ -30,6 +30,11 @@ export interface FairwayOpts {
   wallHs?: Record<number, number>;
   /** Segment indices whose floor gets no earth skirt (it passes over another track). */
   noSkirt?: number[];
+  /**
+   * Segment indices whose floor is a separate smooth ribbon (curves, slides): they get no box
+   * floor, and the straight floors either side stop square at them instead of overlapping.
+   */
+  smooth?: number[];
 }
 
 const EPS = 1e-4;
@@ -92,8 +97,9 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
   };
 
   // Floors
+  const smooth = (i: number) => !!opts.smooth?.includes(i);
   for (let i = 0; i < segs.length; i++) {
-    if (opts.noFloor?.includes(i)) continue;
+    if (opts.noFloor?.includes(i) || smooth(i)) continue;
     const s = segs[i];
     let a = points[i],
       b = points[i + 1];
@@ -102,16 +108,16 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
       let ext0 = 0,
         ext1 = 0;
       if (i === 0) ext0 = opts.openStart ? 0 : endPad;
-      else if (turnAt(i)) ext0 = turnExt(i, Math.max(w, widthOf(i - 1)));
+      else if (turnAt(i) && !smooth(i - 1)) ext0 = turnExt(i, Math.max(w, widthOf(i - 1)));
       if (i === segs.length - 1) ext1 = opts.openEnd ? 0 : endPad;
-      else if (turnAt(i + 1)) ext1 = turnExt(i + 1, Math.max(w, widthOf(i + 1)));
+      else if (turnAt(i + 1) && !smooth(i + 1)) ext1 = turnExt(i + 1, Math.max(w, widthOf(i + 1)));
       a = [a[0] - s.dx * ext0, a[1], a[2] - s.dz * ext0];
       b = [b[0] + s.dx * ext1, b[1], b[2] + s.dz * ext1];
     } else {
       // Sloped and turning (slides, spirals): overlap along the slope to close the outer wedge.
       const k = s.dy / s.l;
-      const ext0 = turnAt(i) ? turnExt(i, w) : 0;
-      const ext1 = i < segs.length - 1 && turnAt(i + 1) ? turnExt(i + 1, w) : 0;
+      const ext0 = turnAt(i) && !smooth(i - 1) ? turnExt(i, w) : 0;
+      const ext1 = i < segs.length - 1 && turnAt(i + 1) && !smooth(i + 1) ? turnExt(i + 1, w) : 0;
       a = [a[0] - s.dx * ext0, a[1] - k * ext0, a[2] - s.dz * ext0];
       b = [b[0] + s.dx * ext1, b[1] + k * ext1, b[2] + s.dz * ext1];
     }
@@ -181,18 +187,51 @@ export function fairway(points: Vec3[], opts: FairwayOpts = {}): Solid[] {
   return out;
 }
 
-/** A smooth floor strip along a curving, sloping centreline (slides, corkscrews). */
-export function ribbon(path: Vec3[], width: number, surface: SurfaceKind = 'grass', skirt = true): Solid {
-  const m = path[Math.floor(path.length / 2)];
+/**
+ * A smooth floor strip along a curving, sloping centreline (slides, corkscrews, curves). `dir0` /
+ * `dir1` square its ends off to the straight floors it meets (angles in the XZ plane).
+ */
+export function ribbon(
+  path: Vec3[],
+  width: number,
+  surface: SurfaceKind = 'grass',
+  skirt = true,
+  dir0?: number,
+  dir1?: number,
+): Solid {
+  const { left, right } = ribbonEdges(path, width, dir0, dir1);
+  return strip(left, right, surface, skirt, path);
+}
+
+/** A floor strip between two edge lines (top surface), e.g. where two lanes share one green. */
+export function strip(left: Vec3[], right: Vec3[], surface: SurfaceKind = 'grass', skirt = true, path?: Vec3[]): Solid {
+  const k = Math.floor(left.length / 2);
+  const m: Vec3 = [(left[k][0] + right[k][0]) / 2, (left[k][1] + right[k][1]) / 2, (left[k][2] + right[k][2]) / 2];
   return {
     shape: 'ribbon',
     role: 'floor',
     center: [m[0], m[1] - FLOOR_T / 2, m[2]],
-    size: [1, FLOOR_T, width],
+    size: [1, FLOOR_T, Math.hypot(left[k][0] - right[k][0], left[k][2] - right[k][2])],
     rot: [0, 0, 0],
     surface,
-    path: path.map((p) => [...p] as Vec3),
+    path: (path ?? left.map((l, i) => [(l[0] + right[i][0]) / 2, (l[1] + right[i][1]) / 2, (l[2] + right[i][2]) / 2] as Vec3)).map(
+      (p) => [...p] as Vec3,
+    ),
+    left: left.map((p) => [...p] as Vec3),
+    right: right.map((p) => [...p] as Vec3),
     ...(skirt ? {} : { skirt: false }),
+  };
+}
+
+/** A low grassy mound on the green (roll over it or round it). */
+export function dome(x: number, z: number, y: number, diameter: number, height: number): Solid {
+  return {
+    shape: 'dome',
+    role: 'floor',
+    center: [x, y, z],
+    size: [diameter, height, diameter],
+    rot: [0, 0, 0],
+    surface: 'grass',
   };
 }
 

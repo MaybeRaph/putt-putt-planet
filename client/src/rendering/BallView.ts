@@ -266,33 +266,131 @@ export function buildHat(id: string): THREE.Group {
   return grp;
 }
 
-/** Procedural putter for the aiming pose. Origin = where the head meets the ball. */
+/**
+ * Procedural putter for the aiming pose. Origin = where the head meets the ball; the ball sits
+ * towards +z, the shaft leans back towards -z. Every style plays the same: looks only.
+ */
 export function buildPutter(id: string): THREE.Group {
   const c = COSMETIC_BY_ID.get(id) ?? COSMETIC_BY_ID.get('putter.classic')!;
+  const shape = c.shape ?? 'blade';
+  const col = c.color,
+    col2 = c.color2 ?? '#263238';
   const grp = new THREE.Group();
-  const shaftColor =
-    c.pattern === 'stripes' ? (c.color2 ?? '#ff1744') : id === 'putter.wood' ? '#6d4c41' : '#eceff1';
-  const shaft = new THREE.Mesh(
-    g('shaft', () => new THREE.CylinderGeometry(0.018, 0.018, 1.0, 8)),
-    toon(shaftColor),
-  );
-  shaft.position.set(0, 0.55, -0.12);
-  shaft.rotation.x = -0.25;
-  const grip = new THREE.Mesh(
-    g('grip', () => new THREE.CylinderGeometry(0.03, 0.03, 0.22, 8)),
-    toon(c.color2 ?? '#263238'),
-  );
-  grip.position.set(0, 1.02, -0.24);
-  grip.rotation.x = -0.25;
-  const headGeo =
-    id === 'putter.hammer'
-      ? g('hammer', () => new THREE.CylinderGeometry(0.08, 0.08, 0.3, 12).rotateZ(Math.PI / 2))
-      : g('head', () => new THREE.BoxGeometry(0.28, 0.09, 0.08));
-  const head = new THREE.Mesh(headGeo, toon(c.color, { emissive: id === 'putter.neon' ? 0.6 : 0 }));
-  head.position.set(0, 0.05, -0.08);
-  for (const m of [shaft, grip, head]) {
+  const glow = id === 'putter.neon' || shape === 'star' ? 0.55 : 0;
+  const add = (geo: THREE.BufferGeometry, color: string, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, emissive = 0) => {
+    const m = new THREE.Mesh(geo, toon(color, { emissive, metalness: id === 'putter.gold' ? 0.6 : 0 }));
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
     m.castShadow = true;
     grp.add(m);
+    return m;
+  };
+  const shaftColor =
+    shape === 'cane'
+      ? '#ffffff'
+      : shape === 'hockey' || shape === 'flamingo' || shape === 'star'
+        ? col
+        : id === 'putter.wood'
+          ? '#6d4c41'
+          : shape === 'hammer'
+            ? '#a1887f'
+            : '#eceff1';
+  // Shaft (striped for the candy cane) and grip.
+  if (shape === 'cane') {
+    for (let k = 0; k < 8; k++) {
+      const f = (k + 0.5) / 8;
+      add(
+        g('caneseg', () => new THREE.CylinderGeometry(0.02, 0.02, 1.0 / 8, 8)),
+        k % 2 ? col2 : '#ffffff',
+        0,
+        0.55 + (f - 0.5) * Math.cos(0.25),
+        -0.12 + (f - 0.5) * Math.sin(-0.25),
+        -0.25,
+      );
+    }
+  } else add(g('shaft', () => new THREE.CylinderGeometry(0.018, 0.018, 1.0, 8)), shaftColor, 0, 0.55, -0.12, -0.25);
+  if (shape !== 'cane') add(g('grip', () => new THREE.CylinderGeometry(0.03, 0.03, 0.22, 8)), shape === 'hockey' ? '#212121' : col2, 0, 1.02, -0.24, -0.25);
+  switch (shape) {
+    case 'mallet':
+      // Half-moon mallet with a sight line on top.
+      add(g('mallet', () => new THREE.CylinderGeometry(0.12, 0.12, 0.07, 24, 1, false, Math.PI / 2, Math.PI)), col, 0, 0.045, -0.04);
+      add(g('malletface', () => new THREE.BoxGeometry(0.24, 0.07, 0.014)), col, 0, 0.045, -0.04);
+      add(g('sight', () => new THREE.BoxGeometry(0.012, 0.004, 0.1)), col2, 0, 0.082, -0.09, 0, 0, 0, 0.3);
+      break;
+    case 'fang':
+      add(g('fangface', () => new THREE.BoxGeometry(0.26, 0.065, 0.045)), col, 0, 0.045, -0.06, 0, 0, 0, glow);
+      for (const sx of [-1, 1])
+        add(g('fangprong', () => new THREE.BoxGeometry(0.06, 0.06, 0.15)), col2, sx * 0.1, 0.042, -0.15, 0, 0, 0, glow ? 0.4 : 0);
+      break;
+    case 'hammer':
+      add(g('hammer', () => new THREE.CylinderGeometry(0.075, 0.075, 0.3, 14).rotateZ(Math.PI / 2)), col, 0, 0.075, -0.08);
+      for (const sx of [-1, 1])
+        add(g('hammerband', () => new THREE.CylinderGeometry(0.078, 0.078, 0.03, 14).rotateZ(Math.PI / 2)), col2, sx * 0.11, 0.075, -0.08);
+      break;
+    case 'hockey': {
+      // Flat, upturned blade with a band of tape.
+      add(g('hockey', () => new THREE.BoxGeometry(0.32, 0.075, 0.03)), col, 0.06, 0.04, -0.05, 0, 0, 0.12);
+      add(g('hockeytape', () => new THREE.BoxGeometry(0.12, 0.078, 0.034)), col2, 0.1, 0.045, -0.05, 0, 0, 0.12);
+      break;
+    }
+    case 'flamingo': {
+      // The bird's head is the club head: a pink head with a hooked, black-tipped beak.
+      const head = add(g('flamhead', () => new THREE.SphereGeometry(0.06, 14, 10)), col, -0.04, 0.06, -0.07);
+      head.scale.set(1.5, 0.95, 0.95);
+      add(g('flambeak', () => new THREE.ConeGeometry(0.03, 0.12, 10).rotateZ(-Math.PI / 2)), '#fff3e0', 0.1, 0.05, -0.07);
+      add(g('flamtip', () => new THREE.ConeGeometry(0.018, 0.045, 8).rotateZ(-Math.PI / 2)), '#212121', 0.175, 0.045, -0.07);
+      for (const sx of [-1, 1]) add(g('flameye', () => new THREE.SphereGeometry(0.012, 8, 6)), '#212121', -0.01, 0.085, -0.07 + sx * 0.05);
+      break;
+    }
+    case 'cane':
+      // The crook of the cane lies on the green as the head.
+      for (let k = 0; k < 6; k++)
+        add(
+          g('canehead', () => new THREE.CylinderGeometry(0.03, 0.03, 0.05, 10).rotateZ(Math.PI / 2)),
+          k % 2 ? col2 : '#ffffff',
+          -0.125 + k * 0.05,
+          0.04,
+          -0.07,
+        );
+      add(g('canetip', () => new THREE.SphereGeometry(0.03, 10, 8)), col2, 0.15, 0.04, -0.07);
+      break;
+    case 'star': {
+      add(g('starstrike', () => new THREE.BoxGeometry(0.2, 0.05, 0.05)), col, 0, 0.035, -0.06);
+      const star = add(
+        g('star', () => {
+          const sh = new THREE.Shape();
+          for (let k = 0; k < 10; k++) {
+            const a = Math.PI / 2 + (k * Math.PI) / 5;
+            const r = k % 2 ? 0.045 : 0.1;
+            if (k) sh.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+            else sh.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+          }
+          return new THREE.ExtrudeGeometry(sh, { depth: 0.03, bevelEnabled: false }).translate(0, 0, -0.015);
+        }),
+        col2,
+        0,
+        0.16,
+        -0.08,
+        0,
+        0,
+        0,
+        glow,
+      );
+      star.rotation.x = -0.25;
+      break;
+    }
+    case 'rocket':
+      add(g('rocketbody', () => new THREE.CylinderGeometry(0.045, 0.045, 0.2, 14).rotateZ(Math.PI / 2)), col, -0.02, 0.05, -0.07);
+      add(g('rocketnose', () => new THREE.ConeGeometry(0.045, 0.09, 14).rotateZ(-Math.PI / 2)), col2, 0.125, 0.05, -0.07);
+      for (const a of [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3]) {
+        const fin = add(g('rocketfin', () => new THREE.BoxGeometry(0.06, 0.05, 0.008)), col2, -0.11, 0.05, -0.07);
+        fin.rotation.x = a;
+        fin.translateY(0.045);
+      }
+      add(g('rocketwin', () => new THREE.CylinderGeometry(0.018, 0.018, 0.01, 12).rotateX(Math.PI / 2)), '#4fc3f7', 0.03, 0.05, -0.024, 0, 0, 0, 0.3);
+      break;
+    default:
+      add(g('head', () => new THREE.BoxGeometry(0.28, 0.09, 0.08)), col, 0, 0.05, -0.08, 0, 0, 0, glow);
   }
   return grp;
 }

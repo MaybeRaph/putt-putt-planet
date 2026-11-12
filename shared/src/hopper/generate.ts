@@ -23,8 +23,10 @@ import {
   pillar,
   ribbon,
   room,
+  strip,
   wall,
   zone,
+  dome,
 } from '../courses/builder';
 import { hashString, pick, range, rng } from '../rng';
 import { MAX_DEPTH, countLevel, type OmenId, type RewardId, type StageSpec, type TrinketId } from './defs';
@@ -124,8 +126,15 @@ export function stageHole(seed: number, index: number, spec: StageSpec): Hole {
       gravityScale = [0.55, 0.75, 0.87, 1][g];
       break;
     case 'slick':
+      // The whole green freezes (sand and sticky patches stay put). The compass thaws it to a
+      // frost, then (Lv2) leaves the slopes grippy too.
       if (g < 3)
-        for (const s of input.solids as Solid[]) if (s.role === 'floor') s.surface = g ? 'metal' : 'ice';
+        for (const s of input.solids as Solid[]) {
+          if (s.role !== 'floor' || s.color) continue;
+          const sloped = Math.abs(s.rot[0]) > 0.02 || Math.abs(s.rot[2]) > 0.02;
+          if (g === 2 && sloped) continue;
+          s.surface = g ? 'frost' : 'ice';
+        }
       break;
     default:
       break;
@@ -180,7 +189,8 @@ type Feature =
   | 'conveyor'
   | 'gate'
   | 'pillars'
-  | 'sticky';
+  | 'sticky'
+  | 'bumps';
 
 /** Lanes of a forked fairway: one steady route, one quick-but-risky route. */
 type LaneKind = 'sand' | 'slalom' | 'hill' | 'bumpers' | 'bridge' | 'boost' | 'jump' | 'machine' | 'ice';
@@ -217,6 +227,8 @@ interface SpiralPlan {
   R: number;
   /** Lead-in before the corkscrew starts. */
   lead: number;
+  /** Full turns round the tower (1, or 2 late in the run). */
+  turns: number;
 }
 
 interface Leg {
@@ -267,6 +279,8 @@ const SPECIAL_DIFF: Record<Special, number> = {
   leap: 1.6,
   loop: 1.2,
 };
+/** Segments whose floor is one smooth ribbon. */
+const SMOOTH: SegTag[] = ['arc', 'spiral', 'slide'];
 /** Specials that may turn up more than once on a hole. */
 const REPEATABLE: Special[] = ['ramp', 'climb', 'hump', 'stream', 'drop', 'slide'];
 /** Specials that change the height of the course. */
@@ -282,7 +296,9 @@ export type Archetype =
   | 'waterworks'
   | 'gauntlet'
   | 'funhouse'
-  | 'skyway';
+  | 'skyway'
+  | 'rolling'
+  | 'thrill';
 
 interface ArchStyle {
   minDepth: number;
@@ -400,7 +416,7 @@ const ARCH: Record<Archetype, ArchStyle> = {
     nouns: ['Funhouse', 'Twister', 'Corkscrew', 'Tubes'],
   }),
   skyway: style({
-    minDepth: 2,
+    minDepth: 1,
     len: [6, 9],
     specialChance: 0.4,
     maxSpecials: 1,
@@ -408,6 +424,30 @@ const ARCH: Record<Archetype, ArchStyle> = {
     featureChance: -0.15,
     round: 0.1,
     nouns: ['Skyway', 'Ledges', 'Cascade', 'Tiers'],
+  }),
+  rolling: style({
+    minDepth: 1,
+    len: [6, 9],
+    width: 0.15,
+    specialChance: 0.15,
+    specials: { hump: 2, valley: 2, slide: 1 },
+    features: { bumps: 4 },
+    featureChance: 0.2,
+    round: 0.25,
+    nouns: ['Hills', 'Moguls', 'Downs', 'Rollers'],
+  }),
+  /** Late-run rollercoasters: steep slides, double corkscrews, drops and loops. */
+  thrill: style({
+    minDepth: 9,
+    legs: 1,
+    len: [7, 10],
+    width: 0.1,
+    specialChance: 0.5,
+    maxSpecials: 2,
+    specials: { spiral: 3, slide: 3, drop: 1.2, loop: 1.2, leap: 1 },
+    featureChance: -0.1,
+    round: 0.25,
+    nouns: ['Rollercoaster', 'Free Fall', 'Big Dipper', 'Thrill Ride'],
   }),
 };
 export const ARCHETYPES = Object.keys(ARCH) as Archetype[];
@@ -424,9 +464,12 @@ export function holeArchetype(seed: number, index: number, spec: StageSpec): Arc
     const j = Math.floor(r() * (i + 1));
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
-  // 4 is coprime with the deck size, so every route option walks the whole deck.
+  // 4 is coprime with the deck size (11), so every route option walks the whole deck.
   const a = deck[(index * 4 + spec.variant) % deck.length];
-  return spec.depth >= ARCH[a].minDepth ? a : 'classic';
+  if (spec.depth < ARCH[a].minDepth) return 'classic';
+  // The last planets swap plain holes for rollercoasters.
+  if (a === 'classic' && spec.depth >= 10) return 'thrill';
+  return a;
 }
 
 /** Every boss has a set piece from its planet and leans on its planet's heaviest machinery. */
@@ -502,6 +545,15 @@ function planFork(
   return { m, sweep, hs, rin: first ? 2.6 : 3.2, rout: last ? 3.6 : 3.2, lanes };
 }
 
+/** Sideways slope (d lateral / d along) of a fork lane `s` metres after the split. */
+function forkSlope(F: ForkPlan, k: number, s: number): number {
+  const h = F.hs[k];
+  if (s <= 0 || s >= F.m) return 0;
+  if (s < F.sweep) return ((h * Math.PI) / (2 * F.sweep)) * Math.sin((Math.PI * s) / F.sweep);
+  if (s > F.m - F.sweep) return -((h * Math.PI) / (2 * F.sweep)) * Math.sin((Math.PI * (F.m - s)) / F.sweep);
+  return 0;
+}
+
 /** Lateral offset of a fork lane `s` metres after the split (smooth swoop out and back in). */
 function forkLat(F: ForkPlan, k: number, s: number): number {
   const h = F.hs[k];
@@ -511,6 +563,10 @@ function forkLat(F: ForkPlan, k: number, s: number): number {
 
 /** Set pieces of the most recently generated hole (for tests and tooling). */
 export let lastHoleSpecials: string[] = [];
+/** Raw par estimate of the most recently generated hole, before rounding (for tooling). */
+export let lastHoleParBase = 0;
+/** Inputs to the par estimate of the most recently generated hole (for tooling). */
+export let lastHoleParFeatures: Record<string, number> = {};
 
 function golfHole(seed: number, index: number, spec: StageSpec) {
   const r = rng(hashString(`hop:${seed}:${index}:${spec.variant}`));
@@ -525,7 +581,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
   const world = spec.world;
   const nLegs = Math.max(
     2,
-    Math.min(7, 2 + Math.round(t * 2.5) + (r() < 0.5 ? 1 : 0) + (boss ? 1 : 0) + st.legs),
+    Math.min(8, 2 + Math.round(t * 3.4) + (r() < 0.5 ? 1 : 0) + (boss ? 1 : 0) + st.legs),
   );
   const laneW = Math.max(1.2, W * 0.72);
   const splitW = laneW * 2 + WALL_T;
@@ -551,22 +607,22 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     addW('jump', 0.8);
     addW('lake', 0.5);
   }
+  // The set pieces (drops, slides, corkscrews, loops, leaps) turn up early and often.
   if (depth >= 1) {
-    addW('drop', 0.7);
-    addW('slide', 0.6);
+    addW('drop', 1.0);
+    addW('slide', 0.9);
+    addW('spiral', 0.7);
   }
-  if (depth >= 2) {
-    addW('spiral', 0.5);
-    addW('loop', 0.5);
-  }
-  if (depth >= 4) {
-    addW('plaza', 0.3);
-    addW('leap', 0.5);
-  }
+  if (depth >= 2) addW('loop', 0.8);
+  if (depth >= 3) addW('leap', 0.8);
+  if (depth >= 4) addW('plaza', 0.3);
   if (depth >= 8) {
     addW('jump', 0.4);
     addW('split', 0.3);
     addW('lake', 0.3);
+    addW('spiral', 0.5);
+    addW('slide', 0.6);
+    addW('loop', 0.3);
   }
   for (const [s, w] of Object.entries(st.specials) as [Special, number][])
     if (s !== 'jump' || depth >= 2) addW(s, w);
@@ -574,8 +630,8 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
   const forced = new Map<number, Special>();
   if (arch === 'fork') forced.set(nLegs >= 3 ? 1 : 0, 'fork');
   if (boss) forced.set(Math.min(nLegs - 1, 1 + (r() < 0.5 ? 1 : 0)), BOSS_SPECIAL[world] ?? 'jump');
-  const maxSpecials = 1 + (t > 0.3 ? 1 : 0) + (boss ? 1 : 0) + st.maxSpecials;
-  const specialChance = 0.32 + 0.35 * t + (boss ? 0.15 : 0) + st.specialChance;
+  const maxSpecials = 1 + (t > 0.3 ? 1 : 0) + (t > 0.65 ? 1 : 0) + (boss ? 1 : 0) + st.maxSpecials;
+  const specialChance = 0.36 + 0.4 * t + (boss ? 0.15 : 0) + st.specialChance;
 
   const usedSpecials: Special[] = [];
   const legs: Leg[] = [];
@@ -614,9 +670,13 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       let spiral: SpiralPlan | undefined;
       if (special === 'spiral') {
         const R = W / 2 + range(r, 1.0, 1.4);
-        spiral = { side: r() < 0.5 ? 1 : -1, R, lead: R + W / 2 + 1.0 };
+        // Late in the run some corkscrews wind round twice.
+        const turns = depth >= 9 && r() < 0.5 ? 2 : 1;
+        spiral = { side: r() < 0.5 ? 1 : -1, R, lead: R + W / 2 + 1.0, turns };
       }
-      const amp = special === 'slide' ? range(r, 0.5, 1.1) * (r() < 0.5 ? 1 : -1) : 0;
+      // Late slides are sometimes steep, fast chutes.
+      const steep = special === 'slide' && t > 0.55 && r() < 0.5;
+      const amp = special === 'slide' ? range(r, 0.5, steep ? 0.75 : 1.1) * (r() < 0.5 ? 1 : -1) : 0;
       const spring = special === 'leap' && r() < 0.5;
       let len = Math.round(range(r, st.len[0], st.len[1] + t * 2));
       if (fork) len = Math.ceil(fork.rin + fork.m + fork.rout);
@@ -631,9 +691,11 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           : special === 'climb'
             ? sgn * (t > 0.4 ? 1.3 : 1.0)
             : special === 'spiral'
-              ? -range(r, 1.6, 2.0)
+              ? -range(r, 1.6, 2.0) * (spiral?.turns ?? 1)
               : special === 'slide'
-                ? -range(r, 1.2, 1.7 + 0.4 * t)
+                ? steep
+                  ? -range(r, 2.0, 2.7)
+                  : -range(r, 1.2, 1.7 + 0.4 * t)
                 : special === 'drop'
                   ? -range(r, 0.7, 1.1)
                   : special === 'leap'
@@ -894,9 +956,10 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         const D = -L.dy;
         const lead = P.lead - trimIn[i];
         push(at(lead, y0), 'lead');
-        const N = 40;
+        const N = 40 * P.turns;
+        const turnsRad = Math.PI * 2 * P.turns;
         for (let k = 1; k <= N; k++) {
-          const phi = (Math.PI * 2 * k) / N;
+          const phi = (turnsRad * k) / N;
           push(
             atL(lead + P.R * Math.sin(phi), P.side * P.R * (1 - Math.cos(phi)), y0 - (D * k) / N),
             'spiral',
@@ -919,12 +982,16 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           color: TOWER[world] ?? TOWER.meadow,
         });
         decorList.push(decor(ISLET[world] ?? 'rock', C[0], top, C[2], Math.min(1.2, dia * 0.45), r() * 6));
-        for (const phi of [Math.PI / 2, Math.PI, (Math.PI * 3) / 2]) {
-          const c = atL(lead + P.R * Math.sin(phi), P.side * P.R * (1 - Math.cos(phi)), y0 - (D * phi) / (Math.PI * 2));
+        for (let phi = Math.PI / 2; phi < turnsRad - 0.1; phi += Math.PI / 2) {
+          const c = atL(lead + P.R * Math.sin(phi), P.side * P.R * (1 - Math.cos(phi)), y0 - (D * phi) / turnsRad);
           collectibles.push(item(holeId, 'coin', c[0], c[1], c[2]));
         }
-        difficulty += SPECIAL_DIFF.spiral;
-        tips.push('Corkscrew! Roll into the spiral and let it carry you down.');
+        difficulty += SPECIAL_DIFF.spiral + (P.turns > 1 ? 0.3 : 0);
+        tips.push(
+          P.turns > 1
+            ? 'Double corkscrew! Twice round the tower and down to the bottom tier.'
+            : 'Corkscrew! Roll into the spiral and let it carry you down.',
+        );
         break;
       }
       case 'slide': {
@@ -934,17 +1001,17 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         const lead = 1.4;
         const run = Lp - lead - 2.4 - tail;
         const n = Math.max(10, Math.ceil(run / 0.65));
+        // An S that leaves and rejoins the leg's line tangentially (no kink at either end).
+        const swing = (u: number) => (A * (Math.sin(Math.PI * 2 * u) - 0.5 * Math.sin(Math.PI * 4 * u))) / 1.3;
+        const fall = (u: number) => y0 - (D * (1 - Math.cos(Math.PI * u))) / 2;
         push(at(lead, y0), 'landing');
         for (let k = 1; k <= n; k++) {
-          const sk = (run * k) / n;
-          push(
-            atL(lead + sk, A * Math.sin((Math.PI * 2 * sk) / run), y0 - (D * (1 - Math.cos((Math.PI * sk) / run))) / 2),
-            'slide',
-          );
+          const u = k / n;
+          push(atL(lead + run * u, swing(u), fall(u)), 'slide');
         }
         push(E, 'landing');
         for (const f of [0.25, 0.5, 0.75]) {
-          const c = atL(lead + run * f, A * Math.sin(Math.PI * 2 * f), y0 - (D * (1 - Math.cos(Math.PI * f))) / 2);
+          const c = atL(lead + run * f, swing(f), fall(f));
           collectibles.push(item(holeId, 'coin', c[0], c[1], c[2]));
         }
         difficulty += SPECIAL_DIFF.slide;
@@ -1263,8 +1330,14 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       const a0 = off0 + F.sweep,
         a1 = off0 + F.m - F.sweep;
       const lat = (k: number, a: number) => forkLat(F, k, a - off0);
+      /**
+       * Half of lane k's floor measured square to the leg (not to the lane): a lane slanting
+       * across the leg needs a wider cut to stay W wide. Cutting both lanes on the same lines
+       * square to the leg lets the shared green and the two lanes meet edge to edge.
+       */
+      const half = (k: number, a: number) => W / 2 / Math.cos(Math.atan(forkSlope(F, k, a - off0)));
       /** Gap between the lanes' inner edges `a` along the leg (negative where they overlap). */
-      const gapAt = (a: number) => lat(0, a) + lat(1, a) - W;
+      const gapAt = (a: number) => lat(0, a) + lat(1, a) - half(0, a) - half(1, a);
       // Where the lanes stop sharing a floor (and meet again): the island's tips.
       const crossing = (lo: number, hi: number) => {
         let x = lo,
@@ -1311,6 +1384,30 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
 
       const lanePaths: Vec3[][] = [];
       ([1, -1] as const).forEach((side, k) => lanePaths.push(buildLane(F.lanes[k], side, k)));
+      // Floors of the swoops: one shared green that splits at the island's tip into two lanes
+      // (and the mirror image where they meet again). Every cut is square to the leg, so the
+      // pieces meet edge to edge: no overlaps and no slivers.
+      const edge = (k: number, a: number, outer: boolean) => {
+        const c = (k === 0 ? 1 : -1) * lat(k, a);
+        const o = (k === 0) === outer ? 1 : -1;
+        return atL(a, c + o * half(k, a), y0);
+      };
+      for (const [list, tipA, sharedFirst] of [
+        [sweepIn, tips[0], true],
+        [sweepOut, tips[1], false],
+      ] as const) {
+        const ti = list.reduce((b, a, j) => (Math.abs(a - tipA) < Math.abs(list[b] - tipA) ? j : b), 0);
+        const shared = sharedFirst ? list.slice(0, ti + 1) : list.slice(ti);
+        const apart = sharedFirst ? list.slice(ti) : list.slice(0, ti + 1);
+        if (shared.length > 1)
+          extraSolids.push(strip(shared.map((a) => edge(0, a, true)), shared.map((a) => edge(1, a, true))));
+        if (apart.length > 1)
+          for (const k of [0, 1]) {
+            const lft = apart.map((a) => (k === 0 ? edge(0, a, true) : edge(1, a, false)));
+            const rgt = apart.map((a) => (k === 0 ? edge(0, a, false) : edge(1, a, true)));
+            extraSolids.push(strip(lft, rgt));
+          }
+      }
       const safeK = SAFE_LANES.includes(F.lanes[0]) ? 0 : 1;
       push(at(off0, y0), 'flat');
       push(at(off0 + F.m, y0), 'fork', lanePaths[safeK].slice(1, -1));
@@ -1480,6 +1577,10 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         const inPts = sweepIn.slice(0, -1).map((a) => atL(a, side * lat(k, a), y0));
         const outPts = sweepOut.slice(1).map((a) => atL(a, side * lat(k, a), y0));
         const full = [...inPts, ...lp, ...outPts];
+        // The swoops' floors are smooth strips (built once for both lanes below).
+        const swoops: number[] = [];
+        for (let j = 0; j < nIn; j++) swoops.push(j);
+        for (let j = 0; j < sweepOut.length - 1; j++) swoops.push(nIn + lp.length - 1 + j);
         // Inner rails only where the lanes have parted (they share one floor near the ends).
         const along = [...sweepIn.slice(0, -1), ...lp.map(() => (a0 + a1) / 2), ...sweepOut.slice(1)];
         for (let j = 0; j < full.length - 1; j++)
@@ -1492,6 +1593,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
             openLeft: openL,
             openRight: openR,
             noFloor: noF,
+            smooth: swoops,
           }),
         );
         return full;
@@ -1558,6 +1660,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
   const noSkirt: number[] = [];
   const wallHs: Record<number, number> = {};
   const widths: Record<number, number> = {};
+  const smooth: number[] = [];
   tags.forEach((tg, i) => {
     if (tg === 'gap' || tg === 'stream' || tg === 'fork') {
       noFloor.push(i);
@@ -1573,17 +1676,16 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       }
     } else if (tg === 'slide') wallHs[i] = 0.5;
     else if (tg === 'split') widths[i] = splitW;
-    if (tg === 'spiral' || tg === 'slide') noFloor.push(i);
-    else if (tg === 'plaza') widths[i] = plazaW;
+    if (tg === 'plaza') widths[i] = plazaW;
     else if (tg === 'lake') {
       widths[i] = lakeW;
       noFloor.push(i);
     }
   });
 
-  const pool: Feature[] = ['pillars'];
+  const pool: Feature[] = ['pillars', 'bumps'];
   if (!socks) pool.push('sand');
-  if (depth >= 1) pool.push('boost', 'bumpers');
+  if (depth >= 1) pool.push('boost', 'bumpers', 'bumps');
   if (depth >= 2) pool.push('spinner');
   if (depth >= 3) pool.push('mover');
   if ((depth >= 4 || arch === 'waterworks') && socks < 3) pool.push('pools');
@@ -1611,15 +1713,28 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       ? ['windmill', 'spinner', 'mover', 'gate']
       : ['spinner', 'mover', 'bumpers'];
 
-  // Corkscrews and slides get one smooth floor each (no seams to kick the ball at speed).
+  // Curves, corkscrews and slides get one smooth floor each: no seams to kick a fast ball, and
+  // no overlapping or gaping corners. Each end is cut square to the straight floor it meets.
+  const segAng = (k: number) => Math.atan2(pts[k + 1][2] - pts[k][2], pts[k + 1][0] - pts[k][0]);
   for (let i = 0; i < tags.length; ) {
-    if (tags[i] !== 'spiral' && tags[i] !== 'slide') {
+    if (!SMOOTH.includes(tags[i])) {
       i++;
       continue;
     }
     let j = i;
     while (j + 1 < tags.length && tags[j + 1] === tags[i]) j++;
-    extraSolids.push(ribbon(pts.slice(i, j + 2), W, 'grass', tags[i] !== 'spiral'));
+    const skirt = tags[i] !== 'spiral' && !noSkirt.includes(i);
+    extraSolids.push(
+      ribbon(
+        pts.slice(i, j + 2),
+        widths[i] ?? W,
+        'grass',
+        skirt,
+        i > 0 ? segAng(i - 1) : undefined,
+        j + 1 < tags.length ? segAng(j + 1) : undefined,
+      ),
+    );
+    for (let k = i; k <= j; k++) smooth.push(k);
     i = j + 1;
   }
 
@@ -1639,15 +1754,57 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     i = j + 1;
   }
   const tubeBias = arch === 'funhouse' ? 0.25 : 0;
+  const segLenAt = (k: number) => Math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][2] - pts[k][2]);
+  /** Half the footprint of segment k (how far its green and rails reach sideways). */
+  const halfAt = (k: number) => (tags[k] === 'fork' ? 7 : (widths[k] ?? W) / 2 + WALL_T);
+  /** Tightest bend radius along points i0..i1+1 (including the joints at either end). */
+  const tightest = (i0: number, i1: number) => {
+    let best = Infinity;
+    for (let k = Math.max(1, i0); k <= Math.min(pts.length - 2, i1 + 1); k++) {
+      const a = pts[k - 1],
+        b = pts[k],
+        c = pts[k + 1];
+      const ab = Math.hypot(b[0] - a[0], b[2] - a[2]),
+        bc = Math.hypot(c[0] - b[0], c[2] - b[2]),
+        ac = Math.hypot(c[0] - a[0], c[2] - a[2]);
+      const cross = Math.abs((b[0] - a[0]) * (c[2] - b[2]) - (b[2] - a[2]) * (c[0] - b[0]));
+      if (cross < 1e-6) continue;
+      best = Math.min(best, (ab * bc * ac) / (2 * cross));
+    }
+    return best;
+  };
   for (const [i0, i1] of runs) {
     if (tunnels.length >= 2) break;
     const tg = tags[i0];
     let runLen = 0;
-    for (let k = i0; k <= i1; k++) runLen += Math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][2] - pts[k][2]);
+    for (let k = i0; k <= i1; k++) runLen += segLenAt(k);
     if (runLen < 3) continue;
-    const chance = (tg === 'slide' ? 0.5 : tg === 'arc' ? 0.3 : 0.1) + tubeBias;
+    const chance = (tg === 'slide' ? 0.65 : tg === 'arc' ? 0.42 : 0.15) + tubeBias;
     if (r() > chance) continue;
-    tunnels.push({ points: pts.slice(i0, i1 + 2).map((p) => [...p] as Vec3), width: W });
+    // Slides have taller rails: their tube is a little wider so the rails stay inside it.
+    const tw = tg === 'slide' ? W + 0.5 : W;
+    const rho = tw / 2 + 0.28;
+    // A tube round a tight bend would fold over itself on the inside.
+    if (tightest(i0, i1) < rho + 1.0) continue;
+    // Keep clear of every other part of the course (alongside, above or below).
+    let clash = false;
+    for (let k = i0; k <= i1 + 1 && !clash; k++) {
+      const p = pts[k];
+      for (let m = 0; m < tags.length && !clash; m++) {
+        if (m >= i0 - 1 && m <= i1 + 1) continue;
+        const a = pts[m],
+          b = pts[m + 1];
+        const yLo = Math.min(a[1], b[1]),
+          yHi = Math.max(a[1], b[1]);
+        if (yLo > p[1] + rho * 1.05 + 0.6 || yHi < p[1] - 1.2) continue;
+        if (segDist(p, a, b) < rho + 0.15 + halfAt(m)) clash = true;
+      }
+      for (const sd of extraSolids)
+        if (sd.role === 'block' && sd.shape === 'cylinder' && sd.size[0] > 1.2)
+          if (Math.hypot(p[0] - sd.center[0], p[2] - sd.center[2]) < rho + sd.size[0] / 2 + 0.2) clash = true;
+    }
+    if (clash) continue;
+    tunnels.push({ points: pts.slice(i0, i1 + 2).map((p) => [...p] as Vec3), width: tw });
     for (let k = i0; k <= i1; k++) tunnelSegs.add(k);
   }
 
@@ -1699,6 +1856,22 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           zones.push(zone('ice', c[0], c[2], 3, W, c[1], rot));
           difficulty += 1;
           break;
+        case 'bumps': {
+          // Low mounds over one side of the green: roll round them on the clear side, or take
+          // the short line over the top and let them nudge you.
+          const side = r() < 0.5 ? 1 : -1;
+          const n = segLen >= 7 && r() < 0.5 ? 3 : 2;
+          const span = Math.min(segLen * 0.5, n === 3 ? 3.2 : 2.0);
+          for (let j = 0; j < n; j++) {
+            const along = -span / 2 + (span * j) / Math.max(1, n - 1);
+            const lat = side * W * (j % 2 ? 0.16 : 0.24);
+            const d = range(r, 0.85, 1.15) * Math.min(1.2, W * 0.5);
+            const hgt = range(r, 0.09, 0.13 + 0.05 * t);
+            extraSolids.push(dome(c[0] + nx * lat + ux * along, c[2] + nz * lat + uz * along, c[1], d, hgt));
+          }
+          difficulty += 0.4;
+          break;
+        }
         case 'bumpers': {
           const off = W * 0.25;
           for (const [s, along] of [
@@ -1903,17 +2076,35 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     }
   }
 
-  lastHoleSpecials = [...legs.map((l) => l.special ?? ''), ...(tunnels.length ? ['tunnel'] : [])].filter(Boolean);
+  lastHoleSpecials = [
+    ...legs.map((l) => l.special ?? ''),
+    ...(tunnels.length ? ['tunnel'] : []),
+    ...(legs.some((l) => (l.spiral?.turns ?? 1) > 1) ? ['spiral2'] : []),
+    ...(legs.some((l) => l.special === 'slide' && l.dy <= -2) ? ['chute'] : []),
+    ...(extraSolids.some((x) => x.shape === 'dome') ? ['bumps'] : []),
+  ].filter(Boolean);
   let length = 0;
   for (let i = 0; i < pts.length - 1; i++)
     length +=
       Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][2] - pts[i][2]) *
       (tags[i] === 'spiral' ? 0.15 : tags[i] === 'slide' ? 0.5 : 1);
   const base = 1.0 + length / 15 + sharp * 0.28 + curves * 0.16 + difficulty * 0.14;
-  // Bosses get a stingier par: every stroke over costs hearts.
-  const par = boss
-    ? Math.max(3, Math.min(6, Math.round(base - 1.0)))
-    : Math.max(2, Math.min(6, Math.round(base)));
+  lastHoleParBase = base;
+  let down = 0;
+  for (let i = 0; i < pts.length - 1; i++)
+    if (pts[i + 1][1] < pts[i][1] - 0.01) down += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][2] - pts[i][2]);
+  lastHoleParFeatures = { length, down, sharp, curves, difficulty, legs: legs.length };
+  // What a near-perfect player (the solver) needs, fitted on ~180 generated holes (rms 0.8):
+  // length matters little (fast slides and long putts eat it up); tight corners and hazards do.
+  const solverEst = 1.07 + 0.025 * (length - down) + 0.03 * down + 0.12 * sharp - 0.05 * curves + 0.167 * difficulty;
+  // Par tightens as the run goes on (the raw estimate got more generous on long late holes),
+  // and stays between 0.5 and 1.8 strokes above the solver so no hole is a giveaway or a trap.
+  // Bosses get a stingier par still: every stroke over costs hearts.
+  const raw = base - 0.8 * t - (boss ? 1 : 0);
+  const near = solverEst - (boss ? 0.3 : 0);
+  const est = Math.min(Math.max(raw, near + 0.5), near + 1.8);
+  const cap = t > 0.5 ? 7 : 6;
+  const par = Math.max(boss ? 3 : 2, Math.min(cap, Math.round(est)));
   const [adj, noun] = NAMES[world] ?? NAMES.meadow;
   const nouns = st.nouns.length && r() < 0.65 ? st.nouns : noun;
   const name = boss ? (BOSS_NAMES[world] ?? 'Boss') : `${pick(r, adj)} ${pick(r, nouns)}`;
@@ -1923,7 +2114,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     id: holeId,
     name,
     par,
-    fairway: { width: W, openLeft, openRight, noFloor, widths, wallHs, noSkirt },
+    fairway: { width: W, openLeft, openRight, noFloor, widths, wallHs, noSkirt, smooth },
     points: pts,
     path: pathPts,
     obstacles,

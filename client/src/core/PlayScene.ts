@@ -285,6 +285,7 @@ export class PlayScene {
         break;
       case 'boost':
         audio.boost();
+        if (bv) this.view?.pulseSpring(bv.pos);
         if (bv)
           this.particles.burst(bv.pos, {
             count: 14,
@@ -633,7 +634,9 @@ export class PlayScene {
         ? v3(other.pos)
         : this.fallbackFocus.copy(v3(this.session.course.holes[this.loadedHole].cup));
     }
-    this.rig.update(dt, focus, view.colliders);
+    this.rig.update(dt, focus);
+    // Anything between the camera and the ball fades so you can always see your shot.
+    view.updateOcclusion(this.rig.camera.position, focus, dt);
 
     // Slow-mo on a final putt approaching the cup (local only).
     if (this.session.kind === 'local' && !rm && me && me.phase === 'moving') {

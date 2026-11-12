@@ -271,7 +271,7 @@ export class Match {
           this.afterBallStopped(e);
           break;
         case 'rest':
-          if (this.restCountsAsHoled(e)) this.finishEntrant(e, false, 1);
+          if (this.restCountsAsHoled(e)) this.finishEntrant(e, false, this.gimmeStrokes(), true);
           else this.afterBallStopped(e);
           break;
         case 'stuck':
@@ -317,6 +317,10 @@ export class Match {
   protected restCountsAsHoled(_e: string): boolean {
     return false;
   }
+  /** Strokes added when a resting ball is given as holed (a tap-in). */
+  protected gimmeStrokes(): number {
+    return 1;
+  }
   /** Final stroke count for an entrant that holed out. */
   protected holedStrokes(_e: string, strokes: number): number {
     return strokes;
@@ -325,12 +329,13 @@ export class Match {
   /** Called once when every entrant is done, before the holeComplete event. */
   protected onHoleComplete(): void {}
 
-  protected finishEntrant(e: string, pickedUp: boolean, extraStrokes = 0): void {
+  protected finishEntrant(e: string, pickedUp: boolean, extraStrokes = 0, gimme = false): void {
     if (this.done[e]) return;
     this.done[e] = true;
-    if (extraStrokes) {
+    if (gimme) {
       this.strokes[e] += extraStrokes;
       this.sim.pickUp(e);
+      this.events.push({ type: 'sunk', ball: e, entrant: e });
       this.events.push({ type: 'holed', ball: e, entrant: e });
     }
     const strokes = pickedUp

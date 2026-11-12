@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   PHYSICS,
   computeBounds,
@@ -7,7 +8,8 @@ import {
   kinematicParts,
   obstaclePose,
   obstacleSolids,
-  ribbonEdges,
+  domeSphere,
+  solidRibbon,
   windmillVisual,
   type Collectible,
   type Hole,
@@ -18,7 +20,8 @@ import {
   type Zone,
 } from '@ppp/shared';
 import { canvasTexture, checkerMaterial, darken, mottleTexture, toon, woodTexture } from './materials';
-import { buildDecor, type Rect2 } from './decor';
+import { buildDecor } from './decor';
+import { Footprint } from './footprint';
 import { Landscape } from './Landscape';
 import { hashString } from '@ppp/shared';
 
@@ -30,6 +33,8 @@ export class CourseView {
   readonly root = new THREE.Group();
   /** Meshes the camera must not pass through, and the aim preview reflects off. */
   readonly colliders: THREE.Object3D[] = [];
+  /** Other pieces that may hide the ball from the camera (raised terraces); they fade too. */
+  private readonly occluders: THREE.Object3D[] = [];
   readonly bounds: { min: THREE.Vector3; max: THREE.Vector3 };
   readonly groundY: number;
   private readonly owned: { dispose(): void }[] = [];
@@ -68,6 +73,7 @@ export class CourseView {
     this.groundY = Math.min(...floorTops) - (theme.decorKit === 'space' ? 9 : 0.32);
 
     for (const s of hole.solids) this.addSolid(s);
+    this.flushStatic();
     for (const o of hole.obstacles) this.addObstacle(o);
     for (const z of hole.zones) this.addZone(z);
     for (const t of hole.tunnels ?? []) this.addTunnel(t);
@@ -75,34 +81,25 @@ export class CourseView {
     this.addCup();
     this.addTee();
 
-    const keepOut: Rect2[] = all.map((s) => {
-      const bb = computeBounds([s]);
-      return { x0: bb.min[0], z0: bb.min[2], x1: bb.max[0], z1: bb.max[2] };
-    });
-    // Ponds and lagoons too, so grass and trees don't poke through the water.
-    for (const z of hole.zones) {
-      if (z.kind !== 'water') continue;
-      const c = Math.abs(Math.cos(z.rotY)),
-        s = Math.abs(Math.sin(z.rotY));
-      const hx = (c * z.size[0] + s * z.size[2]) / 2,
-        hz = (s * z.size[0] + c * z.size[2]) / 2;
-      keepOut.push({ x0: z.center[0] - hx, z0: z.center[2] - hz, x1: z.center[0] + hx, z1: z.center[2] + hz });
-    }
+    // Exact footprint of the course (floors, rails, blocks, ponds): grass and scenery grow right
+    // up to it, but never through it.
+    const foot = new Footprint(all, hole.zones, b.min, b.max);
     // Keep the camera's usual spot behind the tee clear of trees.
     const t0 = hole.tee,
       t1 = hole.path[1] ?? hole.cup;
     const tl = Math.hypot(t1[0] - t0[0], t1[2] - t0[2]) || 1;
     const bx = t0[0] - ((t1[0] - t0[0]) / tl) * 3.5,
       bz = t0[2] - ((t1[2] - t0[2]) / tl) * 3.5;
-    const courseRects = keepOut.slice();
-    keepOut.push({ x0: bx - 3, z0: bz - 3, x1: bx + 3, z1: bz + 3 });
+    const nearCourse = (x: number, z: number, margin: number) => foot.near(x, z, margin);
+    const keepOut = (x: number, z: number, margin: number) =>
+      foot.near(x, z, margin) || (Math.abs(x - bx) < 3 + margin && Math.abs(z - bz) < 3 + margin);
     this.landscape = new Landscape({
       center: new THREE.Vector2((this.bounds.min.x + this.bounds.max.x) / 2, (this.bounds.min.z + this.bounds.max.z) / 2),
       half: new THREE.Vector2((this.bounds.max.x - this.bounds.min.x) / 2, (this.bounds.max.z - this.bounds.min.z) / 2),
       groundY: this.groundY,
       kit: theme.decorKit,
       seed: hashString(hole.id) % 100000,
-      keepOut: courseRects,
+      keepOut: nearCourse,
       grass: theme.decorKit === 'space' ? 0 : (opts.grass ?? 40000),
     });
     this.root.add(this.landscape.group);
@@ -140,7 +137,7 @@ export class CourseView {
 
   /** Smooth strip (slide, corkscrew): checker top, earthy sides, and a curtain down to the ground. */
   private addRibbon(s: Solid): void {
-    const { left, right } = ribbonEdges(s.path!, s.size[2]);
+    const { left, right } = solidRibbon(s);
     const n = left.length;
     const th = s.size[1];
     const pos: number[] = [];
@@ -162,12 +159,17 @@ export class CourseView {
     }
     const geo = this.own(new THREE.BufferGeometry());
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    // World-space UVs (for ice/frost textures; the checker is world-space already).
+    const uvs: number[] = [];
+    for (let i = 0; i < pos.length; i += 3) uvs.push(pos[i] / 3, pos[i + 2] / 3);
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geo.setIndex([...top, ...side]);
     geo.addGroup(0, top.length, 0);
     geo.addGroup(top.length, side.length, 1);
     geo.computeVertexNormals();
-    const sideMat = toon(darken(this.theme.ground, 0.62));
-    sideMat.side = THREE.DoubleSide;
+    // (A double-sided copy: the cached toon material is shared by every floor's sides.)
+    this.ribbonSideMat ??= this.own(Object.assign(toon(darken(this.theme.ground, 0.62)).clone(), { side: THREE.DoubleSide }));
+    const sideMat = this.ribbonSideMat;
     const mesh = new THREE.Mesh(geo, [this.floorTopMaterial(s), sideMat]);
     mesh.receiveShadow = true;
     mesh.castShadow = true;
@@ -200,27 +202,61 @@ export class CourseView {
 
   private addSolid(s: Solid): void {
     if (s.shape === 'ribbon') {
-      if (s.path) this.addRibbon(s);
+      this.addRibbon(s);
+      return;
+    }
+    if (s.shape === 'dome') {
+      this.addDome(s);
       return;
     }
     let mesh: THREE.Mesh;
     const t = this.theme;
     if (s.role === 'floor') {
-      const geo = this.solidGeometry(s, false);
-      if (s.color) {
-        mesh = new THREE.Mesh(geo, toon(s.color));
-      } else {
-        const top = this.floorTopMaterial(s);
-        const side = toon(darken(t.ground, 0.62));
-        mesh = new THREE.Mesh(
-          geo,
-          s.shape === 'box' ? [side, side, top, side, side, side] : [side, top, side],
-        );
-        this.addSkirt(s);
+      // Floors never move or fade: they are baked into a few merged meshes (one per material).
+      const m = new THREE.Matrix4().compose(
+        new THREE.Vector3(...s.center),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(s.rot[0], s.rot[1], s.rot[2])),
+        new THREE.Vector3(1, 1, 1),
+      );
+      const geo = s.shape === 'cylinder'
+        ? new THREE.CylinderGeometry(s.size[0] / 2, s.size[0] / 2, s.size[1], 24)
+        : new THREE.BoxGeometry(s.size[0], s.size[1], s.size[2]);
+      if (s.surface === 'ice' || s.surface === 'frost') {
+        const uv = geo.attributes.uv as THREE.BufferAttribute;
+        for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * s.size[0]) / 3, (uv.getY(i) * s.size[2]) / 3);
       }
-      mesh.receiveShadow = true;
+      const mats = s.color
+        ? [toon(s.color)]
+        : s.shape === 'box'
+          ? [this.floorSide(), this.floorSide(), this.floorTopMaterial(s), this.floorSide(), this.floorSide(), this.floorSide()]
+          : [this.floorSide(), this.floorTopMaterial(s), this.floorSide()];
+      // Raised terraces can stand between the camera and a ball on the tier below, so they stay
+      // separate pieces that can fade; everything low is merged.
+      const raised = this.theme.decorKit !== 'space' && computeBounds([s]).max[1] - this.groundY > 0.9;
+      if (raised) {
+        const grp = new THREE.Group();
+        const mesh = new THREE.Mesh(this.own(geo), s.color ? mats[0] : mats);
+        mesh.applyMatrix4(m);
+        mesh.receiveShadow = true;
+        grp.add(mesh);
+        if (!s.color) this.addSkirt(s, grp);
+        this.root.add(grp);
+        grp.traverse((o) => (o as THREE.Mesh).isMesh && this.occluders.push(o));
+        return;
+      }
+      this.queueStatic(geo, m, mats);
+      if (!s.color) this.addSkirt(s);
+      geo.dispose();
+      return;
     } else if (s.role === 'wall') {
-      mesh = new THREE.Mesh(this.solidGeometry(s, true), s.color ? toon(s.color) : this.woodMaterial(s.size[0]));
+      const geo = this.solidGeometry(s, true);
+      if (!s.color) {
+        // Bake the plank repeat into the rail's UVs so every rail shares one material.
+        const uv = geo.attributes.uv as THREE.BufferAttribute;
+        const rx = Math.max(1, s.size[0] / 1.4);
+        for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * rx);
+      }
+      mesh = new THREE.Mesh(geo, s.color ? toon(s.color) : this.woodMaterial());
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.colliders.push(mesh);
@@ -235,12 +271,61 @@ export class CourseView {
     this.root.add(mesh);
   }
 
-  /** Wood-plank rail material tinted with the world's wall colour (texture repeats along the rail). */
-  private woodMaterial(length: number): THREE.Material {
-    const map = this.own(woodTexture().clone());
-    map.needsUpdate = true;
-    map.repeat.set(Math.max(1, length / 1.4), 1);
-    return this.own(new THREE.MeshStandardMaterial({ color: new THREE.Color(this.theme.wall).multiplyScalar(1.15), map, roughness: 0.82 }));
+  /** A low mound in the green: a shallow spherical cap with the green's checker running over it. */
+  private addDome(s: Solid): void {
+    const { c, r } = domeSphere(s.center, s.size);
+    const theta = Math.acos(Math.max(-1, Math.min(1, (r - s.size[1]) / r)));
+    const geo = this.own(new THREE.SphereGeometry(r, 40, 10, 0, Math.PI * 2, 0, theta));
+    const mesh = new THREE.Mesh(geo, this.floorTopMaterial(s));
+    mesh.position.set(c[0], c[1], c[2]);
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    this.root.add(mesh);
+  }
+
+  /** Wood-plank rail material tinted with the world's wall colour (one per hole, shared by every rail). */
+  private woodMat: THREE.Material | null = null;
+  private woodMaterial(): THREE.Material {
+    this.woodMat ??= this.own(
+      new THREE.MeshStandardMaterial({ color: new THREE.Color(this.theme.wall).multiplyScalar(1.15), map: woodTexture(), roughness: 0.82 }),
+    );
+    return this.woodMat;
+  }
+
+  /** Static geometry waiting to be merged, by material. */
+  private readonly staticBatches = new Map<THREE.Material, THREE.BufferGeometry[]>();
+
+  /** Queue a geometry (placed by `m`) for merging; `mats` is indexed by its groups' materialIndex. */
+  private queueStatic(geo: THREE.BufferGeometry, m: THREE.Matrix4, mats: THREE.Material[]): void {
+    const flat = geo.index ? geo.toNonIndexed() : geo.clone();
+    flat.applyMatrix4(m);
+    const groups = geo.groups.length ? geo.groups : [{ start: 0, count: flat.attributes.position.count, materialIndex: 0 }];
+    for (const gr of groups) {
+      const mat = mats[gr.materialIndex ?? 0] ?? mats[0];
+      const part = new THREE.BufferGeometry();
+      for (const name of ['position', 'normal', 'uv']) {
+        const a = flat.attributes[name] as THREE.BufferAttribute | undefined;
+        if (!a) continue;
+        part.setAttribute(name, new THREE.BufferAttribute(a.array.slice(gr.start * a.itemSize, (gr.start + gr.count) * a.itemSize), a.itemSize));
+      }
+      let list = this.staticBatches.get(mat);
+      if (!list) this.staticBatches.set(mat, (list = []));
+      list.push(part);
+    }
+    flat.dispose();
+  }
+
+  /** Merge everything queued into one mesh per material. */
+  private flushStatic(): void {
+    for (const [mat, parts] of this.staticBatches) {
+      const merged = mergeGeometries(parts, false);
+      for (const p of parts) p.dispose();
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(this.own(merged), mat);
+      mesh.receiveShadow = true;
+      this.root.add(mesh);
+    }
+    this.staticBatches.clear();
   }
 
   private readonly blockMats = new Map<string, THREE.Material>();
@@ -254,7 +339,11 @@ export class CourseView {
   }
 
   /** Visual-only earth "skirt" under a floor down to the terrain, so raised greens read as terraces. */
-  private addSkirt(s: Solid): void {
+  private floorSide(): THREE.Material {
+    return toon(darken(this.theme.ground, 0.62));
+  }
+
+  private addSkirt(s: Solid, into?: THREE.Group): void {
     if (this.theme.decorKit === 'space' || s.shape !== 'box' || s.skirt === false) return;
     if (Math.abs(s.rot[0]) > 0.6 || Math.abs(s.rot[2]) > 0.6) return;
     const bb = computeBounds([s]);
@@ -264,12 +353,21 @@ export class CourseView {
     const inset = 0.004 * (this.skirtIndex++ % 5);
     const pitch = s.rot[2];
     const len = s.size[0] * Math.cos(pitch) - inset * 2;
-    const geo = this.own(new THREE.BoxGeometry(len, top - bottom, s.size[2] - inset * 2));
-    const m = new THREE.Mesh(geo, this.skirtMaterial());
-    m.position.set(s.center[0], (top + bottom) / 2, s.center[2]);
-    m.rotation.set(0, s.rot[1], 0);
-    m.receiveShadow = true;
-    this.root.add(m);
+    const geo = new THREE.BoxGeometry(len, top - bottom, s.size[2] - inset * 2);
+    const m = new THREE.Matrix4().compose(
+      new THREE.Vector3(s.center[0], (top + bottom) / 2, s.center[2]),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, s.rot[1], 0)),
+      new THREE.Vector3(1, 1, 1),
+    );
+    if (into) {
+      const mesh = new THREE.Mesh(this.own(geo), this.skirtMaterial());
+      mesh.applyMatrix4(m);
+      mesh.receiveShadow = true;
+      into.add(mesh);
+      return;
+    }
+    this.queueStatic(geo, m, [this.skirtMaterial()]);
+    geo.dispose();
   }
 
   private skirtMat: THREE.Material | null = null;
@@ -284,10 +382,10 @@ export class CourseView {
    * Ice: a mid-blue, semi-glossy surface. Kept well below pure white so that a whole frozen green
    * (Slick Greens) under a strong sun doesn't blow out or bloom on high quality.
    */
-  private iceMaterial(rx: number, ry: number, overlay = false): THREE.MeshStandardMaterial {
+  private iceMaterial(rx: number, ry: number, overlay = false, frost = false): THREE.MeshStandardMaterial {
     const tex = this.own(
       canvasTexture(256, (c, s) => {
-        c.fillStyle = '#9ccbe3';
+        c.fillStyle = frost ? '#c4dce6' : '#9ccbe3';
         c.fillRect(0, 0, s, s);
         c.strokeStyle = 'rgba(235,248,255,0.55)';
         c.lineWidth = 2;
@@ -315,13 +413,21 @@ export class CourseView {
     );
   }
 
+  private readonly iceMats = new Map<string, THREE.Material>();
+  private ribbonSideMat: THREE.Material | null = null;
   private floorTopMaterial(s: Solid): THREE.Material {
     const t = this.theme;
     switch (s.surface) {
       case 'sand':
         return toon('#ecd9a0');
       case 'ice':
-        return this.iceMaterial(s.size[0] / 3, s.size[2] / 3);
+      case 'frost': {
+        // One material per hole; box floors bake their size into the UVs (see addSolid).
+        const key = s.surface;
+        let m = this.iceMats.get(key);
+        if (!m) this.iceMats.set(key, (m = this.iceMaterial(1, 1, false, key === 'frost')));
+        return m;
+      }
       case 'sticky':
         return toon('#f28dc0');
       case 'rubber':
@@ -1002,6 +1108,84 @@ export class CourseView {
     return this.items.get(id)?.c.kind;
   }
 
+  /** A ball was just launched: bounce the spring pad under it (each launch, every ball). */
+  pulseSpring(at: THREE.Vector3): void {
+    for (const sp of this.springs)
+      if (Math.hypot(at.x - sp.z.center[0], at.z - sp.z.center[2]) < Math.max(sp.z.size[0], sp.z.size[2]) / 2 + 0.4)
+        sp.pulse = 1;
+  }
+
+  private readonly occRay = new THREE.Raycaster();
+  /** Objects faded because they stand between the camera and the ball. */
+  private readonly faded = new Map<
+    THREE.Object3D,
+    { alpha: number; hit: boolean; mats: { mesh: THREE.Mesh; orig: THREE.Material | THREE.Material[]; fade: THREE.Material | THREE.Material[] }[] }
+  >();
+
+  private occList: THREE.Object3D[] | null = null;
+  private occCandidates(): THREE.Object3D[] {
+    this.occList ??= [...this.colliders, ...this.occluders];
+    return this.occList;
+  }
+
+  /** The whole object a mesh belongs to (an obstacle's group, or the mesh itself). */
+  private fadeUnit(o: THREE.Object3D): THREE.Object3D {
+    let u = o;
+    while (u.parent && u.parent !== this.root) u = u.parent;
+    return u;
+  }
+
+  /**
+   * Fade rails, blocks and machinery standing between the camera and the ball (or around the
+   * camera), so the ball and the line of the shot always stay visible. They come back when clear.
+   */
+  updateOcclusion(cam: THREE.Vector3, ball: THREE.Vector3, dt: number): void {
+    for (const f of this.faded.values()) f.hit = false;
+    const from = ball.clone().add(new THREE.Vector3(0, 0.12, 0));
+    for (const lift of [0, 0.35]) {
+      const to = cam.clone().add(new THREE.Vector3(0, -lift, 0));
+      const dir = to.clone().sub(from);
+      const far = dir.length();
+      if (far < 1e-3) continue;
+      this.occRay.set(from, dir.divideScalar(far));
+      this.occRay.near = 0.25;
+      this.occRay.far = far + 0.3;
+      for (const hit of this.occRay.intersectObjects(this.occCandidates(), false)) {
+        const u = this.fadeUnit(hit.object);
+        let f = this.faded.get(u);
+        if (!f) {
+          f = { alpha: 1, hit: true, mats: [] };
+          u.traverse((m) => {
+            const mesh = m as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            const orig = mesh.material;
+            const fadeOne = (x: THREE.Material) => {
+              const c = x.clone();
+              c.transparent = true;
+              c.depthWrite = false;
+              this.owned.push(c);
+              return c;
+            };
+            f!.mats.push({ mesh, orig, fade: Array.isArray(orig) ? orig.map(fadeOne) : fadeOne(orig) });
+          });
+          this.faded.set(u, f);
+        }
+        f.hit = true;
+      }
+    }
+    // Faded copies of the materials are made once per object and kept for next time.
+    const k = 1 - Math.exp(-dt * 10);
+    for (const f of this.faded.values()) {
+      if (!f.hit && f.alpha >= 1) continue;
+      f.alpha = f.alpha + ((f.hit ? 0.28 : 1) - f.alpha) * k;
+      if (!f.hit && f.alpha > 0.985) f.alpha = 1;
+      for (const m of f.mats) {
+        m.mesh.material = f.alpha >= 1 ? m.orig : m.fade;
+        for (const x of Array.isArray(m.fade) ? m.fade : [m.fade]) x.opacity = f.alpha;
+      }
+    }
+  }
+
   pulseBumper(id: string): void {
     const b = this.bumpers.get(id);
     if (b) b.pulse = 1;
@@ -1050,10 +1234,6 @@ export class CourseView {
     for (const a of this.animTextures) a.tex.offset.x += a.dir.x * a.speed * dt * 0.8;
     for (const w of this.waterMats) w.uniforms.uTime.value = now;
     for (const sp of this.springs) {
-      const on = balls.some(
-        (b) => Math.hypot(b.x - sp.z.center[0], b.z - sp.z.center[2]) < Math.min(sp.z.size[0], sp.z.size[2]) / 2 + 0.2,
-      );
-      if (on && sp.pulse <= 0) sp.pulse = 1;
       sp.pulse = Math.max(0, sp.pulse - dt * 3);
       sp.obj.position.y = 0.06 + Math.sin(sp.pulse * Math.PI) * 0.18;
     }
@@ -1098,7 +1278,7 @@ export class CourseView {
     void mat;
     const all = [...this.hole.solids, ...this.hole.obstacles.flatMap((o) => obstacleSolids(o))];
     for (const s of all) {
-      if (s.shape === 'ribbon') continue;
+      if (s.shape === 'ribbon' || s.shape === 'dome') continue;
       const geo =
         s.shape === 'box'
           ? new THREE.BoxGeometry(...s.size)

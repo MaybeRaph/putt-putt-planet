@@ -137,15 +137,19 @@ export class LockerPreview {
         this.ball.update(pos, vel, dt, false, false);
       } else {
         this.ball.update(new THREE.Vector3(0, 0.16, 0), new THREE.Vector3(), dt, false, false);
-        this.ball.showPutter(this.slot === 'putter', Math.PI / 2 + Math.sin(this.t * 0.6) * 0.4, 0.4);
+        this.ball.showPutter(this.slot === 'putter', Math.PI / 2, 0.15);
       }
     }
     // Camera: wide orbit for rolling, close turntable for hats/putters.
     const ca = this.t * 0.35;
-    if (closeUp) {
-      const d = this.slot === 'putter' ? 1.35 : 1.0;
-      this.camera.position.set(Math.cos(ca) * d, this.slot === 'putter' ? 0.6 : 0.42, Math.sin(ca) * d);
-      this.camera.lookAt(0, this.slot === 'putter' ? 0.32 : 0.25, 0);
+    if (this.slot === 'putter') {
+      // Frame the whole club, head and shaft, swinging gently through a half turn.
+      const a = -Math.PI / 2 + Math.sin(this.t * 0.45) * 1.1;
+      this.camera.position.set(Math.cos(a) * 1.75, 0.62, -0.25 + Math.sin(a) * 1.75);
+      this.camera.lookAt(0, 0.26, -0.22);
+    } else if (closeUp) {
+      this.camera.position.set(Math.cos(ca), 0.42, Math.sin(ca));
+      this.camera.lookAt(0, 0.25, 0);
     } else {
       this.camera.position.set(0, 0.62, 1.25);
       this.camera.lookAt(0, 0.12, 0);
