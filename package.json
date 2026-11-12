@@ -1,0 +1,39 @@
+{
+  "name": "putt-putt-planet",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "server",
+    "client",
+    "desktop",
+    "mobile"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c magenta,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w client && npm run build -w server",
+    "start": "node server/dist/server.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p shared --noEmit && tsc -p server --noEmit && tsc -p client --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "validate:courses": "tsx scripts/validate-courses.ts",
+    "build:app": "vite build client --base=./ --outDir dist-app --emptyOutDir",
+    "icon": "tsx scripts/make-icon.ts",
+    "desktop:mac": "npm run build:app && npm run build -w server && npm run dist:mac -w desktop",
+    "desktop:win": "npm run build:app && npm run build -w server && npm run dist:win -w desktop",
+    "desktop:dev": "npm run build:app && npm run build -w server && npm run prepare-app -w desktop && npm start -w desktop"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@types/node": "^26.0.0",
+    "concurrently": "^10.0.7",
+    "eslint": "^10.14.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.0",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
+}

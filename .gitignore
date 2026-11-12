@@ -1,0 +1,19 @@
+node_modules
+dist
+server/data
+.DS_Store
+*.log
+dist-app
+desktop/app
+desktop/release
+desktop/resources
+mobile/build
+mobile/ios/App/App/public
+mobile/ios/App/App/capacitor.config.json
+mobile/ios/App/App/config.xml
+
+# Local tooling
+.claude/settings.local.json
+mobile/ios/App/Pods
+mobile/ios/App/build
+*.tsbuildinfo

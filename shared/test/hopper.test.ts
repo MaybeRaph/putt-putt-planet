@@ -1,0 +1,156 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+import {
+  HopperMatch,
+  SKELETON,
+  applyHopperRun,
+  buyUpgrade,
+  defaultProfile,
+  initPhysics,
+  mergeProfiles,
+  parseS2C,
+  stageHole,
+  type HopperMatch as HM,
+} from '../src/index';
+
+beforeAll(async () => {
+  await initPhysics();
+});
+
+const players = [
+  { id: 'a', name: 'A' },
+  { id: 'b', name: 'B' },
+];
+
+/** Finish the current hole for every entrant with `strokes` (teleport + tiny putt). */
+function finishHole(m: HM, strokes: (e: string) => number): void {
+  for (const e of m.entrants) {
+    const n = strokes(e);
+    for (let k = 0; k < n - 1; k++) {
+      (m as unknown as { strokes: Record<string, number> }).strokes[e]++;
+    }
+    const c = m.hole.cup;
+    m.sim.placeBall(e, [c[0] - 0.5, c[1] + 0.2, c[2]]);
+    m.shoot(e, 1, 0, 0.1);
+  }
+  for (let t = 0; t < 600 && m.phase === 'playing'; t++) m.step();
+}
+
+describe('Planet Hopper', () => {
+  it('levels trinkets up during a run (picking one you own again)', () => {
+    const m = new HopperMatch({ seed: 5, players: [players[0]], upgrades: {}, keepsakes: ['overtime'] });
+    type Priv = { addTrinket(t: string): void; trinketOptions(): { trinket?: string; level?: number }[] };
+    const p = m as unknown as Priv;
+    m.startHole(0);
+    expect(m.strokeLimit()).toBe(m.hole.par + 4 + 3);
+    p.addTrinket('overtime');
+    expect(m.lv('overtime')).toBe(2);
+    expect(m.strokeLimit()).toBe(m.hole.par + 4 + 5);
+    p.addTrinket('overtime');
+    p.addTrinket('overtime'); // capped at Lv3
+    expect(m.lv('overtime')).toBe(3);
+    expect(m.strokeLimit()).toBe(m.hole.par + 4 + 7);
+    // Drafts offer level-ups of owned trinkets, never past Lv3.
+    for (const t of ['magnet', 'glove', 'moth', 'feeder', 'bank', 'clover', 'pouch', 'ironheart', 'shield', 'socks', 'compass'])
+      p.addTrinket(t);
+    const opts = p.trinketOptions();
+    expect(opts.length).toBe(3);
+    for (const o of opts) {
+      expect(o.trinket).not.toBe('overtime');
+      expect(o.level).toBe(2);
+    }
+    for (const t of m.hs.trinkets) {
+      p.addTrinket(t);
+      p.addTrinket(t);
+    }
+    expect(p.trinketOptions()).toEqual([]);
+    // Shaping trinkets reach the generated hole at their level.
+    const spec = m.makeSpec(1, null, null, 0);
+    expect(spec.shaping.filter((t) => t === 'magnet').length).toBe(3);
+    expect(stageHole(5, 1, spec).cupScale).toBeCloseTo(1.65);
+  });
+
+  it('generates the same hole for the same seed and spec', () => {
+    const m = new HopperMatch({ seed: 42, players, upgrades: {}, keepsakes: [] });
+    for (const i of [0, 3, 4, 10, SKELETON.length - 1]) {
+      const spec = m.makeSpec(i, i === 10 ? 'gale' : null, null, 1);
+      expect(JSON.stringify(stageHole(42, i, spec))).toBe(JSON.stringify(stageHole(42, i, spec)));
+    }
+    const gale = stageHole(42, 10, m.makeSpec(10, 'gale', null, 1));
+    expect(Math.hypot(...gale.wind)).toBeGreaterThan(0.1);
+    expect(stageHole(42, 4, m.makeSpec(4, null, null, 0)).name).toBe('Wishing Green');
+  });
+
+  it('shares hearts, opens a fork vote, and moves on when everyone voted', () => {
+    const m = new HopperMatch({
+      seed: 7,
+      players,
+      upgrades: { vigor: 1 },
+      keepsakes: ['magnet', 'magnet', 'nope'],
+    });
+    expect(m.hs.maxHearts).toBe(6 + 1 + 2);
+    // Two players with the same keepsake: it stacks into a level 2 trinket.
+    expect(m.hs.trinkets).toEqual(['magnet']);
+    expect(m.hs.levels.magnet).toBe(2);
+    m.startHole(0);
+    expect(m.hole.cupScale).toBeCloseTo(1.5);
+    const par = m.hole.par;
+    // A aces (+2), B double-bogeys (-2): teammates cover each other.
+    finishHole(m, (e) => (e === 'a' ? 1 : par + 2));
+    expect(m.phase).toBe('holeEnd');
+    expect(m.hs.lastDelta).toEqual({ by: { a: 2, b: -2 }, net: 0 });
+    expect(m.hs.hearts).toBe(9);
+    m.advance();
+    const c = m.hs.choice!;
+    expect(c.kind).toBe('route');
+    expect(c.options.length).toBe(2);
+    expect(m.vote('a', 1)).toBe(true);
+    expect(m.hs.stage).toBe(0); // still waiting for B
+    m.vote('b', 1);
+    expect(m.hs.choice).toBeNull();
+    expect(m.hs.stage).toBe(1);
+    expect(m.hs.stages[1].variant).toBe(1);
+    // The parsed score (as sent to clients) carries the run state.
+    const msg = parseS2C(JSON.parse(JSON.stringify({ t: 'score', score: m.score() })));
+    expect(msg && msg.t === 'score' && msg.score.hopper?.stage).toBe(1);
+    m.dispose();
+  });
+
+  it('ends the run at zero hearts unless Second Wind is owned', () => {
+    const run = (upgrades: Record<string, number>) => {
+      const m = new HopperMatch({ seed: 3, players: [players[0]], upgrades, keepsakes: [] });
+      m.startHole(0);
+      m.hs.hearts = 2;
+      finishHole(m, () => m.hole.par + 3);
+      m.advance();
+      return m;
+    };
+    const dead = run({});
+    expect(dead.phase).toBe('courseEnd');
+    expect(dead.hs.result).toBe('lost');
+    const saved = run({ secondwind: 1 });
+    expect(saved.hs.result).toBe('running');
+    expect(saved.hs.hearts).toBe(3);
+    expect(saved.hs.secondWind).toBe(false);
+  });
+
+  it('banks stardust into the profile, and upgrades cost it', () => {
+    const m = new HopperMatch({ seed: 11, players: [players[0]], upgrades: {}, keepsakes: [] });
+    m.startHole(0);
+    finishHole(m, () => m.hole.par);
+    m.hs.dust = 40;
+    m.hs.trinkets.push('feeder');
+    const { profile, grant } = applyHopperRun(defaultProfile('a', 'A'), m, 'a', 60);
+    expect(grant.dust).toBe(40);
+    expect(profile.hopper.dustEarned).toBe(40);
+    expect(profile.hopper.discovered).toContain('feeder');
+    const bought = buyUpgrade(profile, 'vigor');
+    expect(typeof bought).not.toBe('string');
+    if (typeof bought === 'string') return;
+    expect(bought.hopper.upgrades.vigor).toBe(1);
+    expect(bought.hopper.dustSpent).toBe(20);
+    expect(buyUpgrade(bought, 'secondwind')).toBe('Not enough stardust');
+    // Merging keeps the ledger monotonic.
+    const merged = mergeProfiles(profile, bought);
+    expect(merged.hopper.dustEarned - merged.hopper.dustSpent).toBe(20);
+  });
+});

@@ -1,0 +1,100 @@
+{
+  "name": "putt-putt-planet-desktop",
+  "productName": "Putt-Putt Planet",
+  "version": "1.3.0",
+  "description": "Cozy low-poly mini golf with friends",
+  "author": "Putt-Putt Planet",
+  "private": true,
+  "main": "dist/main.cjs",
+  "scripts": {
+    "prepare-app": "node scripts/prepare.mjs",
+    "build:main": "esbuild src/main.ts src/preload.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outdir=dist --out-extension:.js=.cjs",
+    "start": "npm run build:main && electron .",
+    "dist:mac": "npm run prepare-app && npm run build:main && electron-builder --mac --universal",
+    "dist:win": "npm run prepare-app && npm run build:main && electron-builder --win --x64",
+    "dist": "npm run prepare-app && npm run build:main && electron-builder --mac --universal --win --x64"
+  },
+  "devDependencies": {
+    "electron": "45.3.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.puttputtplanet.game",
+    "productName": "Putt-Putt Planet",
+    "copyright": "Putt-Putt Planet",
+    "directories": {
+      "output": "release",
+      "buildResources": "../build"
+    },
+    "files": [
+      "dist/**",
+      "app/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/server.mjs",
+        "to": "server.mjs"
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.games",
+      "icon": "../build/icon.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Putt-Putt Planet uses your local network to play with friends."
+      }
+    },
+    "dmg": {
+      "title": "Putt-Putt Planet",
+      "artifactName": "Putt-Putt-Planet-${version}-mac.dmg"
+    },
+    "win": {
+      "icon": "../build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "artifactName": "Putt-Putt-Planet-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Putt-Putt Planet",
+      "artifactName": "Putt-Putt-Planet-${version}-Setup.exe"
+    },
+    "electronVersion": "45.3.0",
+    "toolsets": {
+      "nsis": "1.2.1"
+    }
+  }
+}

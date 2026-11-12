@@ -1,0 +1,11 @@
+node_modules
+dist
+server/data
+dist-app
+desktop/app
+desktop/release
+desktop/resources
+mobile/build
+mobile/ios/App/App/public
+mobile/ios/App/App/capacitor.config.json
+mobile/ios/App/App/config.xml

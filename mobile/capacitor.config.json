@@ -1,0 +1,11 @@
+{
+  "appId": "com.puttputtplanet.game",
+  "appName": "Putt-Putt Planet",
+  "webDir": "../client/dist-app",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#4aa8ff",
+    "scrollEnabled": false,
+    "allowsLinkPreview": false
+  }
+}
