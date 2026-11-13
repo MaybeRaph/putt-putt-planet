@@ -1,7 +1,7 @@
 {
   "name": "putt-putt-planet",
   "private": true,
-  "version": "1.8.5",
+  "version": "1.8.7",
   "type": "module",
   "workspaces": [
     "shared",
