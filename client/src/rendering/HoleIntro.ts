@@ -23,6 +23,8 @@ export const INTRO = {
   lookAhead: 4,
   minHeight: 3.4,
   maxHeight: 8,
+  /** Half-width (m of path) of each smoothing pass over the camera's line. */
+  smooth: 2.6,
 } as const;
 
 /** Total intro = hold + pass + settle: 6 s for a short hole up to 14 s for the longest. */
@@ -104,18 +106,24 @@ export class HoleIntro {
   readonly length: number;
   readonly pos = new THREE.Vector3();
   readonly look = new THREE.Vector3();
-  private readonly curve: THREE.CatmullRomCurve3;
   private readonly back: number;
-  private readonly startDir = new THREE.Vector3();
-  /** Camera height (world y) by camera arc position, sampled from -back to length. */
-  private readonly heights: Float32Array;
-  private readonly h0: number;
-  private readonly dh: number;
+  /**
+   * The camera's rails, sampled every `ds` metres of path from `s0` (= -back) to the cup:
+   * `raw` is the course centreline itself, `soft` the same line with its corners, ramps and
+   * ledges smoothed out, and `high` the camera's height. The flyover reads all three through a
+   * cubic, so the camera's position, and the point it looks at, never change speed or direction
+   * abruptly (it used to ride the centreline itself and swung at every corner).
+   */
+  private readonly soft: Float32Array;
+  private readonly high: Float32Array;
+  private readonly n: number;
+  private readonly s0: number;
+  private readonly ds: number;
+  private readonly cup = new THREE.Vector3();
   private t = 0;
   private skipFrom: { t: number; w: number } | null = null;
   private w = 0;
   private readonly a = new THREE.Vector3();
-  private readonly b = new THREE.Vector3();
 
   constructor(path: Vec3[], blockers: { min: Vec3; max: Vec3 }[] = []) {
     // Drop repeated waypoints (a zero-length span would break the curve's parameterisation).
@@ -125,76 +133,126 @@ export class HoleIntro {
       if (!pts.length || pts[pts.length - 1].distanceTo(v) > 0.05) pts.push(v);
     }
     if (pts.length < 2) pts.push(pts[0].clone().add(new THREE.Vector3(0.5, 0, 0)));
-    this.curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
-    this.length = this.curve.getLength();
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+    // Fine arc-length table: the default 200 steps make speed ripple on long, twisty holes.
+    curve.arcLengthDivisions = Math.min(6000, Math.max(400, pts.length * 24));
+    this.length = curve.getLength();
     this.timing = introTiming(this.length);
     this.duration = this.timing.total;
-    this.startDir.subVectors(pts[1], pts[0]).setY(0);
-    if (this.startDir.lengthSq() < 1e-8) this.startDir.set(1, 0, 0);
-    this.startDir.normalize();
+    this.cup.copy(pts[pts.length - 1]);
+    const startDir = new THREE.Vector3().subVectors(pts[1], pts[0]).setY(0);
+    if (startDir.lengthSq() < 1e-8) startDir.set(1, 0, 0);
+    startDir.normalize();
 
     const box = new THREE.Box3().setFromPoints(pts);
     const span = Math.max(box.max.x - box.min.x, box.max.z - box.min.z, 4);
     this.back = Math.min(INTRO.maxBack, Math.max(INTRO.minBack, span * 0.25));
     const lift = Math.min(INTRO.maxHeight, Math.max(INTRO.minHeight, span * 0.18));
 
-    // Height profile: the camera's base height over the path, raised wherever something solid
-    // stands near it, then widened and smoothed so it climbs early and never dips into anything.
-    this.h0 = -this.back;
-    const n = Math.max(64, Math.ceil((this.length + this.back) * 4));
-    this.dh = (this.length + this.back) / (n - 1);
-    const raw = new Float32Array(n);
+    // The centreline, sampled evenly from `back` metres behind the tee to the cup.
+    this.s0 = -this.back;
+    const total = this.length + this.back;
+    const n = (this.n = Math.max(64, Math.ceil(total * 5) + 1));
+    const ds = (this.ds = total / (n - 1));
+    const raw = new Float32Array(n * 3);
+    const v = new THREE.Vector3();
     for (let i = 0; i < n; i++) {
-      const p = this.pathAt(this.h0 + i * this.dh, this.a);
-      let need = p.y + lift;
-      for (const bb of blockers) {
-        const dx = Math.max(bb.min[0] - p.x, 0, p.x - bb.max[0]);
-        const dz = Math.max(bb.min[2] - p.z, 0, p.z - bb.max[2]);
-        if (dx * dx + dz * dz <= INTRO.reach * INTRO.reach)
-          need = Math.max(need, bb.max[1] + INTRO.clearance);
-      }
-      raw[i] = need;
+      const s = this.s0 + i * ds;
+      if (s <= 0) v.copy(pts[0]).addScaledVector(startDir, s);
+      else curve.getPointAt(Math.min(1, s / this.length), v);
+      raw.set([v.x, v.y, v.z], i * 3);
     }
-    const r = Math.max(1, Math.round(2 / this.dh)); // ~2 m
-    const dil = new Float32Array(n);
+    // Smoothed: three passes of a moving average (close to a Gaussian about 2 m wide). The ends
+    // are pinned so the intro still starts dead on the cup and ends over the tee.
+    const rad = Math.max(1, Math.round(INTRO.smooth / ds));
+    let cur = raw;
+    for (let pass = 0; pass < 3; pass++) {
+      const next = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++)
+        for (let c = 0; c < 3; c++) {
+          let sum = 0;
+          for (let j = i - rad; j <= i + rad; j++) sum += cur[Math.max(0, Math.min(n - 1, j)) * 3 + c];
+          next[i * 3 + c] = sum / (2 * rad + 1);
+        }
+      cur = next;
+    }
+    this.soft = cur;
+    const pin = Math.max(2, Math.round((INTRO.smooth * 3) / ds));
+    for (let i = 0; i < n; i++) {
+      const k = smoother(Math.min(i, n - 1 - i) / pin);
+      for (let c = 0; c < 3; c++) this.soft[i * 3 + c] = raw[i * 3 + c] * (1 - k) + this.soft[i * 3 + c] * k;
+    }
+
+    // Height profile: the camera's base height over its (smoothed) line, raised wherever something
+    // solid stands near it, then widened and smoothed so it climbs early and never dips into anything.
+    const need = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = this.soft[i * 3],
+        z = this.soft[i * 3 + 2];
+      let h = this.soft[i * 3 + 1] + lift;
+      for (const bb of blockers) {
+        const dx = Math.max(bb.min[0] - x, 0, x - bb.max[0]);
+        const dz = Math.max(bb.min[2] - z, 0, z - bb.max[2]);
+        const reach = INTRO.reach + ds;
+        if (dx * dx + dz * dz <= reach * reach) h = Math.max(h, bb.max[1] + INTRO.clearance + 0.05);
+      }
+      need[i] = h;
+    }
+    const r = Math.max(2, Math.round(2 / ds)); // ~2 m
+    let hs = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       let m = -Infinity;
-      for (let j = Math.max(0, i - 2 * r); j <= Math.min(n - 1, i + 2 * r); j++) m = Math.max(m, raw[j]);
-      dil[i] = m;
+      for (let j = Math.max(0, i - 2 * r - 2); j <= Math.min(n - 1, i + 2 * r + 2); j++)
+        m = Math.max(m, need[j]);
+      hs[i] = m;
     }
-    this.heights = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      let s = 0,
-        c = 0;
-      for (let j = Math.max(0, i - r); j <= Math.min(n - 1, i + r); j++) {
-        s += dil[j];
-        c++;
+    // Two averaging passes of half the dilation each: smooth slopes, and still never below `need`.
+    for (let pass = 0; pass < 2; pass++) {
+      const next = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        let sum = 0;
+        for (let j = i - r; j <= i + r; j++) sum += hs[Math.max(0, Math.min(n - 1, j))];
+        next[i] = sum / (2 * r + 1);
       }
-      this.heights[i] = s / c;
+      hs = next;
     }
+    this.high = hs;
     this.flyPose(this.length);
   }
 
-  /** Point on the course centreline `s` metres from the tee (straight on behind the tee). */
-  private pathAt(s: number, out: THREE.Vector3): THREE.Vector3 {
-    if (s <= 0) return out.copy(this.curve.getPointAt(0)).addScaledVector(this.startDir, s);
-    return out.copy(this.curve.getPointAt(Math.min(1, s / this.length)));
+  /** Cubic (Catmull-Rom) read of a sampled rail at path position `s`: continuous in speed. */
+  private read(arr: Float32Array, stride: number, comp: number, s: number): number {
+    const x = Math.max(0, Math.min(this.n - 1, (s - this.s0) / this.ds));
+    const i = Math.min(this.n - 2, Math.floor(x));
+    const u = x - i;
+    const at = (k: number) => arr[Math.max(0, Math.min(this.n - 1, k)) * stride + comp];
+    const p0 = at(i - 1),
+      p1 = at(i),
+      p2 = at(i + 1),
+      p3 = at(i + 2);
+    return p1 + 0.5 * u * (p2 - p0 + u * (2 * p0 - 5 * p1 + 4 * p2 - p3 + u * (3 * (p1 - p2) + p3 - p0)));
   }
 
   /** Camera height for a camera standing over path position `s` (smoothed profile). */
   heightAt(s: number): number {
-    const x = (s - this.h0) / this.dh;
-    const i = Math.max(0, Math.min(this.heights.length - 2, Math.floor(x)));
-    const k = Math.max(0, Math.min(1, x - i));
-    return this.heights[i] * (1 - k) + this.heights[i + 1] * k;
+    return this.read(this.high, 1, 0, s);
   }
 
   /** Flyover pose showing path position `s` (0 = tee, length = cup). */
   private flyPose(s: number): void {
     const cs = s - this.back;
-    this.pathAt(cs, this.pos);
-    this.pos.y = this.heightAt(cs);
-    this.pathAt(Math.min(this.length, s + INTRO.lookAhead), this.look);
+    this.pos.set(this.read(this.soft, 3, 0, cs), this.heightAt(cs), this.read(this.soft, 3, 2, cs));
+    // Looks ahead along the hole; the lead shrinks to nothing at the cup (so the hold frames the
+    // cup itself) and grows back without a jolt as the camera pulls away.
+    const rest = Math.max(0, this.length - s);
+    const ls = s + INTRO.lookAhead * (1 - Math.exp(-rest / INTRO.lookAhead));
+    if (rest <= 1e-9) this.look.copy(this.cup);
+    else
+      this.look.set(
+        this.read(this.soft, 3, 0, ls),
+        this.read(this.soft, 3, 1, ls),
+        this.read(this.soft, 3, 2, ls),
+      );
     this.look.y += 0.3;
   }
 

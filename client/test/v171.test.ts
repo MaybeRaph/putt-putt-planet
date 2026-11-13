@@ -213,3 +213,36 @@ describe('v1.7.1 majority hint', () => {
     expect(choiceTimerText(3, true)).toBe('Majority reached, deciding in 3s');
   });
 });
+
+describe('hole intro is smooth', () => {
+  it('glides: no sudden swings of the camera or of where it looks, even round corkscrews', () => {
+    let worstAcc = 0,
+      worstTurn = 0;
+    for (const h of sampleHoles()) {
+      const intro = new HoleIntro(h.path, introBlockers(h));
+      const cam = new THREE.PerspectiveCamera();
+      const P: THREE.Vector3[] = [],
+        D: THREE.Vector3[] = [];
+      while (intro.blend === 0 && intro.elapsed < 30) {
+        intro.update(DT, cam, gamePos, gameLook);
+        P.push(cam.position.clone());
+        D.push(cam.getWorldDirection(new THREE.Vector3()));
+      }
+      for (let k = 2; k < P.length; k++) {
+        const acc =
+          P[k]
+            .clone()
+            .sub(P[k - 1])
+            .sub(P[k - 1].clone().sub(P[k - 2]))
+            .length() /
+          (DT * DT);
+        const turn = Math.abs(D[k].angleTo(D[k - 1]) - D[k - 1].angleTo(D[k - 2])) / (DT * DT);
+        worstAcc = Math.max(worstAcc, acc);
+        worstTurn = Math.max(worstTurn, turn);
+      }
+    }
+    // v1.8.5 peaked at ~3400 m/s² and ~325 rad/s² (it rode the centreline and swung at every corner).
+    expect(worstAcc).toBeLessThan(150);
+    expect(worstTurn).toBeLessThan(25);
+  });
+});
