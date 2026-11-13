@@ -27,8 +27,8 @@ beforeAll(async () => {
 });
 
 describe('v1.7 slick greens', () => {
-  it('has one named grip constant, about 20% up on ice, and leaves other surfaces alone', () => {
-    expect(SLICK_GREEN_GRIP).toBeCloseTo(1.2, 5);
+  it('has one named grip constant (1.2 in v1.7, another 20% in v1.7.1), and leaves other surfaces alone', () => {
+    expect(SLICK_GREEN_GRIP).toBeCloseTo(1.2 * 1.2, 5);
     expect(SURFACES.slick.rolling).toBeCloseTo(SURFACES.ice.rolling * SLICK_GREEN_GRIP, 6);
     expect(SURFACES.slick.drag).toBeCloseTo(SURFACES.ice.drag * SLICK_GREEN_GRIP, 6);
     // The surfaces that are not part of the Slick Greens omen keep their v1.6 feel.
@@ -64,12 +64,13 @@ describe('v1.7 slick greens', () => {
     return x - 1;
   }
 
-  it('slides roughly a fifth less far than true ice', () => {
+  it('slides roughly 30% less far than true ice', () => {
     const ice = roll('ice');
     const slick = roll('slick');
     expect(ice).toBeGreaterThan(8);
-    expect(slick / ice).toBeGreaterThan(0.74);
-    expect(slick / ice).toBeLessThan(0.9);
+    // v1.7: ~0.83 of ice; v1.7.1 adds another 20% of grip: ~0.70.
+    expect(slick / ice).toBeGreaterThan(0.62);
+    expect(slick / ice).toBeLessThan(0.78);
     // And the softened versions are progressively grippier.
     const frost = roll('frost');
     const rime = roll('rime');

@@ -42,6 +42,8 @@ export interface Settings {
   camSensitivity: number;
   invertY: boolean;
   showFps: boolean;
+  /** On-screen readout of your connection's ping (online games only). */
+  showPing: boolean;
   keys: Record<Action, string>;
 }
 
@@ -73,6 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
   camSensitivity: 1,
   invertY: false,
   showFps: false,
+  showPing: false,
   keys: { ...DEFAULT_KEYS },
 };
 

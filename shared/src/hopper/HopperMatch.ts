@@ -32,6 +32,19 @@ export interface HopperSetup {
 /** Trinkets that change the hole itself (baked into the generated geometry/physics). */
 const SHAPING: TrinketId[] = ['magnet', 'glove', 'socks', 'compass'];
 const VOTE_SECONDS = 25;
+/**
+ * Co-op votes with more than two connected players: once a strict majority of them is on one
+ * option, the countdown drops to this (it is never raised or restarted by it). The rules:
+ * - Only connected players count, both for the majority and for the final tally.
+ * - The shortened deadline sticks: if a vote then changes and the majority breaks up, the clock
+ *   keeps running from where it was and the choice is decided by the votes at that moment (ties go
+ *   to the option that was voted for first, as always). Votes can still change until then.
+ * - A disconnect re-checks: the remaining players may now all have voted (decided at once) or
+ *   form a majority (countdown drops). Fewer than three connected players never shortens it,
+ *   but an already shortened deadline stays.
+ * - A reroll deals fresh options: votes, majority and countdown start over (VOTE_SECONDS).
+ */
+export const MAJORITY_SECONDS = 5;
 /** Gimme Clover reach by level (metres from the cup a resting ball drops in for free). */
 export const GIMME_RANGE = [0, 0.9, 1.3, 1.7];
 /** Draft weight by current level: new trinket, level-up to Lv2, level-up to Lv3. */
@@ -500,10 +513,54 @@ export class HopperMatch extends Match {
     if (!this.players.some((p) => p.id === playerId)) return false;
     c.votes[playerId] = i;
     this.voteOrder = [...this.voteOrder.filter((x) => x !== playerId), playerId];
-    const voters = this.players.filter((p) => p.connected);
-    if (voters.every((p) => c.votes[p.id] !== undefined)) this.resolve();
-    else this.changed();
+    this.recount();
     return true;
+  }
+
+  /** The option a strict majority of the connected players voted for, if any (3+ connected). */
+  majorityOption(): number | null {
+    const c = this.hs.choice;
+    const voters = this.players.filter((p) => p.connected);
+    if (!c || voters.length <= 2) return null;
+    const tally = new Map<number, number>();
+    for (const p of voters) {
+      const v = c.votes[p.id];
+      if (v !== undefined) tally.set(v, (tally.get(v) ?? 0) + 1);
+    }
+    for (const [opt, n] of tally) if (n * 2 > voters.length) return opt;
+    return null;
+  }
+
+  /** After a vote or a (dis)connect: decide if everyone has voted, else apply the majority rule. */
+  private recount(): void {
+    const c = this.hs.choice;
+    if (!c) return;
+    const voters = this.players.filter((p) => p.connected);
+    if (voters.length && voters.every((p) => c.votes[p.id] !== undefined)) {
+      this.resolve();
+      return;
+    }
+    const maj = this.majorityOption();
+    if (maj === null) delete c.majority;
+    else {
+      c.majority = maj;
+      // Never raise or restart it: only ever cut it down.
+      if (c.secondsLeft >= 0 && this.choiceTimer > MAJORITY_SECONDS) {
+        this.choiceTimer = MAJORITY_SECONDS;
+        c.secondsLeft = MAJORITY_SECONDS;
+      }
+    }
+    this.changed();
+  }
+
+  override setConnected(playerId: string, connected: boolean): void {
+    super.setConnected(playerId, connected);
+    this.recount();
+  }
+
+  /** Seconds left on the open choice's countdown (host side, exact). */
+  get choiceSecondsLeft(): number {
+    return this.hs.choice && this.hs.choice.secondsLeft >= 0 ? Math.max(0, this.choiceTimer) : -1;
   }
 
   /** Spend a Lucky Dice reroll on the open choice. */
@@ -519,6 +576,7 @@ export class HopperMatch extends Match {
       return true;
     }
     c.votes = {};
+    delete c.majority;
     this.voteOrder = [];
     this.choiceTimer = VOTE_SECONDS;
     if (c.secondsLeft >= 0) c.secondsLeft = VOTE_SECONDS;
@@ -530,14 +588,23 @@ export class HopperMatch extends Match {
   private resolve(): void {
     const c = this.hs.choice;
     if (!c) return;
+    // Connected players' votes decide (all votes if nobody connected has voted).
+    const live = new Set(this.players.filter((p) => p.connected).map((p) => p.id));
+    const counted = Object.entries(c.votes).some(([id]) => live.has(id))
+      ? Object.entries(c.votes).filter(([id]) => live.has(id))
+      : Object.entries(c.votes);
     const tally = new Map<number, number>();
-    for (const v of Object.values(c.votes)) tally.set(v, (tally.get(v) ?? 0) + 1);
+    for (const [, v] of counted) tally.set(v, (tally.get(v) ?? 0) + 1);
     let pick = 0;
     if (tally.size) {
       const best = Math.max(...tally.values());
       const tied = [...tally.entries()].filter(([, n]) => n === best).map(([i]) => i);
       // Tie: the option that got its first vote earliest.
-      pick = this.voteOrder.map((p) => c.votes[p]).find((v) => tied.includes(v)) ?? tied[0];
+      pick =
+        this.voteOrder
+          .filter((p) => counted.some(([id]) => id === p))
+          .map((p) => c.votes[p])
+          .find((v) => tied.includes(v)) ?? tied[0];
     }
     const opt = c.options[pick];
     this.hs.choice = null;

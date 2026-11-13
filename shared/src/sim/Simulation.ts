@@ -1,7 +1,16 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { DT, PHYSICS, SURFACES, type SurfaceKind } from '../config';
 import type { Collectible, Hole, Obstacle, Solid, Vec3, Zone } from '../schema';
-import { clamp, dirVec, distXZ, domeSphere, inYawBox, quatFromEuler, rotateVec, solidRibbon } from '../math';
+import {
+  clamp,
+  dirVec,
+  distXZ,
+  domeCapPoints,
+  inYawBox,
+  quatFromEuler,
+  rotateVec,
+  solidRibbon,
+} from '../math';
 import { kinematicParts, obstaclePose, obstacleSolids } from './obstacles';
 
 let ready: Promise<void> | null = null;
@@ -149,15 +158,15 @@ export class Simulation {
 
   private addStatic(s: Solid, obstacle?: Obstacle): void {
     const ribbon = s.shape === 'ribbon';
-    const dome = s.shape === 'dome' ? domeSphere(s.center, s.size) : null;
+    const dome = s.shape === 'dome';
     const desc = ribbon
       ? ribbonColliderDesc(s)
       : dome
-        ? RAPIER.ColliderDesc.ball(dome.r)
+        ? domeColliderDesc(s)
         : solidColliderDesc(s.shape as 'box', s.size);
     const q = ribbon || dome ? [0, 0, 0, 1] : quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
     desc
-      .setTranslation(...((ribbon ? [0, 0, 0] : dome ? dome.c : s.center) as [number, number, number]))
+      .setTranslation(...((ribbon || dome ? [0, 0, 0] : s.center) as [number, number, number]))
       .setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] })
       .setFriction(0)
       .setRestitution(s.restitution ?? defaultRestitution(s.role, s.surface))
@@ -801,6 +810,20 @@ function solidColliderDesc(shape: 'box' | 'cylinder', size: Vec3): RAPIER.Collid
   return shape === 'box'
     ? RAPIER.ColliderDesc.cuboid(size[0] / 2, size[1] / 2, size[2] / 2)
     : RAPIER.ColliderDesc.cylinder(size[1] / 2, size[0] / 2);
+}
+
+/**
+ * A dome is the convex hull of its visible cap (world space). It used to be the whole sphere the
+ * cap is cut from, which is ~3x wider than the cap and reaches 1.5 m below the green: hidden under
+ * a solid green, but sticking out past rails, ledges and gaps as an invisible bulge.
+ */
+function domeColliderDesc(s: Solid): RAPIER.ColliderDesc {
+  const pts = domeCapPoints(s.center, s.size);
+  const v = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => v.set(p, i * 3));
+  const hull = RAPIER.ColliderDesc.convexHull(v);
+  if (!hull) throw new Error('dome hull failed');
+  return hull;
 }
 
 /** Top surface of a ribbon as a triangle mesh (internal edges smoothed so seams can't kick). */

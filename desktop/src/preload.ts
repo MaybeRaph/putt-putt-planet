@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld('pppNative', {
   getDisplayMode: (): Promise<'windowed' | 'fullscreen'> => ipcRenderer.invoke('display:get'),
   setDisplayMode: (mode: 'windowed' | 'fullscreen'): Promise<'windowed' | 'fullscreen'> =>
     ipcRenderer.invoke('display:set', mode === 'fullscreen' ? 'fullscreen' : 'windowed'),
+  /** Quit to desktop (the main menu's button). */
+  quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
 });

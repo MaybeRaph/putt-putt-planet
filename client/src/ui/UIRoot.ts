@@ -9,6 +9,7 @@ export class UIRoot {
   readonly overlayLayer: HTMLElement;
   private readonly toastLayer: HTMLElement;
   private readonly fps: HTMLElement;
+  private readonly ping: HTMLElement;
   private readonly loading: HTMLElement;
 
   constructor(parent: HTMLElement) {
@@ -17,6 +18,7 @@ export class UIRoot {
     this.overlayLayer = h('div', { class: 'layer overlay hidden' });
     this.toastLayer = h('div', { class: 'toasts' });
     this.fps = h('div', { class: 'fps hidden' });
+    this.ping = h('div', { class: 'fps ping-readout hidden', title: 'Ping to the host' });
     this.loading = h(
       'div',
       { class: 'loading hidden' },
@@ -31,7 +33,7 @@ export class UIRoot {
       this.overlayLayer,
       this.loading,
       this.toastLayer,
-      this.fps,
+      h('div', { class: 'readouts' }, this.fps, this.ping),
     );
     parent.appendChild(this.root);
     // UI click sounds for every button.
@@ -95,5 +97,11 @@ export class UIRoot {
   setFps(n: number | null): void {
     this.fps.classList.toggle('hidden', n === null);
     if (n !== null) this.fps.textContent = `${n} fps`;
+  }
+
+  /** Ping readout ("42 ms" / "reconnecting…"), styled like the FPS counter; null hides it. */
+  setPing(text: string | null): void {
+    this.ping.classList.toggle('hidden', text === null);
+    if (text !== null && this.ping.textContent !== `📶 ${text}`) this.ping.textContent = `📶 ${text}`;
   }
 }

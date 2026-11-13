@@ -71,6 +71,27 @@ export function domeSphere(center: Vec3, size: Vec3): { c: Vec3; r: number } {
   return { c: [center[0], center[1] + h - r, center[2]], r };
 }
 
+/**
+ * Points on a dome's visible cap (rings from the rim up to the top, plus the apex), in world
+ * space. The physics hull is built from these, so the collider is exactly the cap that is drawn
+ * and nothing of the sphere it is cut from pokes out under or beside the green.
+ */
+export function domeCapPoints(center: Vec3, size: Vec3, around = 64, rings = 16): Vec3[] {
+  const { c, r } = domeSphere(center, size);
+  const theta = Math.acos(Math.max(-1, Math.min(1, (r - Math.max(0.01, size[1])) / r)));
+  const out: Vec3[] = [[c[0], c[1] + r, c[2]]];
+  for (let i = 1; i <= rings; i++) {
+    const t = (theta * i) / rings;
+    const ring = r * Math.sin(t),
+      y = c[1] + r * Math.cos(t);
+    for (let j = 0; j < around; j++) {
+      const a = (Math.PI * 2 * j) / around;
+      out.push([c[0] + ring * Math.cos(a), y, c[2] + ring * Math.sin(a)]);
+    }
+  }
+  return out;
+}
+
 /** Unit vector in the XZ plane for an angle (0 = +X, PI/2 = +Z). */
 export function dirVec(angle: number): Vec3 {
   return [Math.cos(angle), 0, Math.sin(angle)];

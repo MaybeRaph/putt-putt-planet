@@ -1,15 +1,16 @@
 import * as THREE from 'three';
-import { DEFAULT_LOADOUT, PHYSICS, REST_CRATES, REWARDS, type MatchEvent, type RewardId, type Vec3 } from '@ppp/shared';
+import { DEFAULT_LOADOUT, PHYSICS, REST_CRATES, REWARDS, SKELETON, type MatchEvent, type RewardId, type Vec3 } from '@ppp/shared';
 import type { Game } from './Game';
 import type { Session } from './Session';
 import { CourseView } from '../rendering/CourseView';
 import { BallView } from '../rendering/BallView';
 import { CameraRig } from '../rendering/CameraRig';
 import { AimView } from '../rendering/AimView';
-import { HoleIntro } from '../rendering/HoleIntro';
+import { HoleIntro, introBlockers, introPlan } from '../rendering/HoleIntro';
 import { Particles } from '../rendering/Particles';
 import { Controls, type HostAction } from '../input/Controls';
 import { Hud } from '../ui/Hud';
+import { pingReadout } from '../ui/ping';
 import { h, scoreName } from '../ui/dom';
 import { audio } from '../audio/Audio';
 
@@ -175,7 +176,15 @@ export class PlayScene {
       (score.phase === 'playing' &&
         this.session.obstacleTime() < 3 &&
         Object.values(score.strokesThisHole).every((n) => !n));
-    if (!hole || !fresh || new URLSearchParams(location.search).has('nointro')) return;
+    if (!hole) return;
+    const plan = introPlan({
+      courseId: course.id,
+      holeIndex: idx,
+      fresh,
+      reducedMotion: this.game.settings.reducedMotion,
+      disabled: new URLSearchParams(location.search).has('nointro'),
+    });
+    if (plan === 'none') return;
     this.introHole = idx;
     const kicker =
       course.id === 'hopper'
@@ -184,9 +193,9 @@ export class PlayScene {
           ? 'Daily Challenge'
           : `Hole ${idx + 1} of ${course.holes.length}`;
     // Reduced motion: no camera move, just the card for a moment (it never blocks play).
-    const fly = !this.game.settings.reducedMotion;
+    const fly = plan === 'fly';
     this.hud.showIntro(kicker, hole.name, hole.par, fly);
-    if (fly) this.intro = new HoleIntro(hole.path);
+    if (fly) this.intro = new HoleIntro(hole.path, introBlockers(hole));
     else this.introCardTimer = window.setTimeout(() => this.hud.hideIntro(), 2200);
   }
 
@@ -512,9 +521,9 @@ export class PlayScene {
     if (ev.type !== 'wall' && ev.type !== 'land') this.refreshScore();
   }
 
-  private isRestStop(): boolean {
-    const hs = this.session.score().hopper;
-    return hs?.stages[hs.stage]?.kind === 'rest';
+  /** A Planet Hopper rest stop (the run's skeleton is fixed and hole i is stage i). */
+  private isRestStop(index = this.loadedHole): boolean {
+    return this.session.course.id === 'hopper' && SKELETON[index]?.kind === 'rest';
   }
 
   /** Rest stop crate labels and the wind gauge (Planet Hopper). */
@@ -704,7 +713,8 @@ export class PlayScene {
     this.rig.update(dt, focus);
     if (this.intro) {
       // The rig has just placed the gameplay camera; the intro blends the flyover into it.
-      this.intro.update(dt, this.rig.camera, this.rig.camera.position.clone(), this.rig.lookPoint);
+      // Paused: the flyover waits where it is.
+      this.intro.update(this.game.paused ? 0 : dt, this.rig.camera, this.rig.camera.position.clone(), this.rig.lookPoint);
       if (this.intro.done) this.endIntro();
     }
     // Anything between the camera and the ball fades so you can always see your shot (during
@@ -824,6 +834,10 @@ export class PlayScene {
       this.fpsAcc.frames = 0;
       this.fpsAcc.t = 0;
       this.game.ui.setFps(this.game.settings.showFps ? this.fpsAcc.fps : null);
+      const net = this.game.net;
+      this.game.ui.setPing(pingReadout(this.game.settings.showPing, this.session.kind === 'remote', net.status, net.rtt));
+      // The Tab board shows everyone's ping: keep it live while it is open.
+      if (this.hud.fullBoardOpen) this.hud.showFullBoard(true, this.session.score(), this.session.players());
     }
     if (!this.debugEl) return;
     const me = balls.find((b) => b.id === this.session.myEntrant());
@@ -855,6 +869,9 @@ export class PlayScene {
     this.particles.points.geometry.dispose();
     (this.particles.points.material as THREE.Material).dispose();
     this.hud.dispose();
+    // The FPS / ping readouts belong to the game screen.
+    this.game.ui.setFps(null);
+    this.game.ui.setPing(null);
     this.debugEl?.remove();
     this.session.dispose();
   }

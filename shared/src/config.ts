@@ -62,8 +62,9 @@ export const PHYSICS = {
 /**
  * How much more grip a frozen green (the Slick Greens omen) has than a true ice patch. Raising it
  * shortens the slide; 1 = as slippery as ice. Only the omen's surfaces (slick, frost, rime) use it.
+ * v1.7: 1.2 (a putt rolls ~17% less far than on ice); v1.7.1: another 20%, 1.44 (~30% less).
  */
-export const SLICK_GREEN_GRIP = 1.2;
+export const SLICK_GREEN_GRIP = 1.44;
 
 export const SURFACES: Record<SurfaceKind, SurfaceParams> = {
   grass: { rolling: 1.15, drag: 0.32, restitution: 0.12, settle: 1 },

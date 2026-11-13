@@ -117,6 +117,14 @@ export class Screens {
         ),
       ),
       h('div', { class: 'version-tag', title: 'Game version' }, `v${APP_VERSION}`),
+      // Desktop app only: a browser tab can't close itself, and iOS apps don't quit themselves.
+      window.pppNative?.quit
+        ? h(
+            'button',
+            { class: 'btn small quit-desktop', title: 'Close the game', onclick: () => void window.pppNative?.quit?.() },
+            '⏻ Quit to desktop',
+          )
+        : null,
       h(
         'div',
         { class: 'footer-hint' },
@@ -1117,7 +1125,7 @@ export class Screens {
           ...opts.map(([v, l]) => h('option', { value: v, selected: s[key] === v }, l)),
         ),
       );
-    const toggle = (label: string, key: 'reducedMotion' | 'invertY' | 'showFps') =>
+    const toggle = (label: string, key: 'reducedMotion' | 'invertY' | 'showFps' | 'showPing') =>
       h(
         'label',
         { class: 'setting' },
@@ -1194,6 +1202,7 @@ export class Screens {
           ['ultra', 'Ultra'],
         ]),
         toggle('Show FPS', 'showFps'),
+        toggle('Show ping (online)', 'showPing'),
         h('h3', {}, 'Accessibility'),
         toggle('Reduced motion', 'reducedMotion'),
         select('Aim colours', 'palette', [

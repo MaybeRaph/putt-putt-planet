@@ -18,6 +18,11 @@ export const WORLD_LABEL: Record<string, string> = {
   space: '🪐 Space',
 };
 
+/** Vote countdown line: the plain auto-pick timer, or the majority hint once the host cut it. */
+export function choiceTimerText(seconds: number, majority: boolean): string {
+  return majority ? `Majority reached, deciding in ${seconds}s` : `Auto-picks in ${seconds}s`;
+}
+
 /** Hearts as icons (compact count when there are many). */
 export function heartsEl(hearts: number, max: number): HTMLElement {
   const el = h('span', { class: 'hop-hearts', title: `${hearts} / ${max} hearts` });
@@ -93,6 +98,8 @@ export class HopperHud {
   private barKey = '';
   private deadline = 0;
   private timerEl: HTMLElement | null = null;
+  /** A strict majority is on one option (the host has cut the countdown). */
+  private majority = false;
   private readonly timer: number;
 
   constructor(
@@ -109,11 +116,15 @@ export class HopperHud {
     );
     this.root = h('div', { class: 'hop-layer' }, this.bar, this.wind, this.choice);
     parent.append(this.root);
-    this.timer = window.setInterval(() => {
-      if (!this.timerEl || !this.deadline) return;
-      const s = Math.max(0, Math.ceil((this.deadline - performance.now()) / 1000));
-      this.timerEl.textContent = `Auto-picks in ${s}s`;
-    }, 250);
+    this.timer = window.setInterval(() => this.renderTimer(), 250);
+  }
+
+  /** Countdown text, from the host's (authoritative) seconds left. */
+  private renderTimer(): void {
+    if (!this.timerEl || !this.deadline) return;
+    const s = Math.max(0, Math.ceil((this.deadline - performance.now()) / 1000));
+    this.timerEl.textContent = choiceTimerText(s, this.majority);
+    this.timerEl.classList.toggle('hop-majority', this.majority);
   }
 
   update(score: ScoreState, players: SessionPlayer[], myId: string): void {
@@ -179,8 +190,9 @@ export class HopperHud {
       this.timerEl = null;
       return;
     }
-    const key = JSON.stringify([c.kind, c.options, c.votes, hs.rerolls]);
+    const key = JSON.stringify([c.kind, c.options, c.votes, hs.rerolls, c.majority]);
     if (c.secondsLeft >= 0) this.deadline = performance.now() + c.secondsLeft * 1000;
+    this.majority = c.majority !== undefined && c.secondsLeft >= 0;
     if (key === this.choiceKey) return;
     const fresh = this.choiceKey === '';
     this.choiceKey = key;
@@ -233,6 +245,7 @@ export class HopperHud {
       ),
     );
     this.choice.classList.remove('hidden');
+    this.renderTimer();
     if (fresh) pulse(this.choice, 'pop');
   }
 

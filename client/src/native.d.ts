@@ -9,6 +9,8 @@ interface PppNative {
   copyText?: (text: string) => Promise<void>;
   getDisplayMode?: () => Promise<'windowed' | 'fullscreen'>;
   setDisplayMode?: (mode: 'windowed' | 'fullscreen') => Promise<'windowed' | 'fullscreen'>;
+  /** Close the app (stops a LAN server first). */
+  quit?: () => Promise<void>;
 }
 
 interface Window {

@@ -1,5 +1,5 @@
 import type { Collectible, CollectibleKind, Decor, HoleInput, Obstacle, Solid, Tunnel, Vec3, Zone } from '../schema';
-import type { SurfaceKind } from '../config';
+import { PHYSICS, type SurfaceKind } from '../config';
 import { ribbonEdges, yawFor } from '../math';
 
 /**
@@ -220,6 +220,20 @@ export function strip(left: Vec3[], right: Vec3[], surface: SurfaceKind = 'grass
     left: left.map((p) => [...p] as Vec3),
     right: right.map((p) => [...p] as Vec3),
     ...(skirt ? {} : { skirt: false }),
+  };
+}
+
+/**
+ * The solid face under a ledge: a block spanning a->b (along the edge of the upper green, `top`
+ * = the upper slab's underside) down to `bottom` (the lower green). A floor slab is only
+ * FLOOR_T thick, so without this the earth skirt drawn below a ledge is visual only and a ball
+ * rolls in under the upper green. Drawn like a floor's side; it has no earth skirt of its own.
+ */
+export function riser(a: Vec3, b: Vec3, width: number, top: number, bottom: number): Solid {
+  return {
+    ...beam([a[0], top, a[2]], [b[0], top, b[2]], width, top - bottom, 'floor'),
+    skirt: false,
+    restitution: PHYSICS.wallRestitution,
   };
 }
 

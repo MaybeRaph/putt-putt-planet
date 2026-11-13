@@ -250,7 +250,8 @@ export class RemoteSession implements Session {
       name: p.name,
       loadout: sanitizeLoadout(p.loadout),
       connected: p.connected,
-      ping: p.ping,
+      // My own link is measured here every couple of seconds; others' come with the room state.
+      ping: p.id === this.localPlayerId && this.net.status === 'online' ? Math.round(this.net.rtt) : p.ping,
       isHost: p.id === this.room!.hostId,
       level: p.level,
     }));

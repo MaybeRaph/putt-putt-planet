@@ -4,6 +4,7 @@ import { h, clear, pulse, scoreName, relScore, tweenNumber, esc } from './dom';
 import type { SessionPlayer } from '../core/Session';
 import { powerColor, type Palette } from '../rendering/AimView';
 import { HopperHud } from './HopperHud';
+import { pingClass, pingLabel } from './ping';
 
 const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 /** Hole tips are written for mouse/keyboard; reword them on touch screens. */
@@ -318,7 +319,12 @@ export class Hud {
     this.fullBoard.classList.toggle('hidden', !show);
     if (!show || !score) return;
     clear(this.fullBoard);
-    this.fullBoard.append(scorecard(this.course, score, players));
+    this.fullBoard.append(scorecard(this.course, score, players, this.online));
+  }
+
+  /** The Tab scoreboard is open (it is redrawn while open so pings stay live). */
+  get fullBoardOpen(): boolean {
+    return !this.fullBoard.classList.contains('hidden');
   }
 
   setMeter(visible: boolean, power: number): void {
@@ -493,14 +499,21 @@ export class Hud {
 }
 
 /** Full scorecard table, shared by the HUD (Tab) and the results screen. */
-export function scorecard(course: Course, score: ScoreState, players: SessionPlayer[]): HTMLElement {
+export function scorecard(course: Course, score: ScoreState, players: SessionPlayer[], online = false): HTMLElement {
   const nameOf = (e: string) => (e === 'team' ? 'Team' : (players.find((p) => p.id === e)?.name ?? '?'));
+  /** Online only: each player's ping (a relay team's players are listed under the table). */
+  const pingCell = (e: string) => {
+    const p = players.find((x) => x.id === e);
+    const label = p ? pingLabel(p, online) : null;
+    return h('td', { class: `ping ${p ? pingClass(p) : ''}` }, label ?? '—');
+  };
   const head = h(
     'tr',
     {},
     h('th', {}, 'Hole'),
     ...course.holes.map((_, i) => h('th', { class: i === score.holeIndex ? 'cur' : '' }, String(i + 1))),
     h('th', {}, 'Total'),
+    online ? h('th', { class: 'ping' }, 'Ping') : null,
   );
   const pars = h(
     'tr',
@@ -508,6 +521,7 @@ export function scorecard(course: Course, score: ScoreState, players: SessionPla
     h('td', {}, 'Par'),
     ...score.pars.map((p) => h('td', {}, String(p))),
     h('td', {}, String(score.pars.reduce((a, b) => a + b, 0))),
+    online ? h('td', {}) : null,
   );
   const rows = score.entrants.map((e) => {
     const card = score.card[e] ?? [];
@@ -530,7 +544,8 @@ export function scorecard(course: Course, score: ScoreState, players: SessionPla
                   : 'even';
         return h('td', { class: cls }, v == null ? '·' : String(v));
       }),
-      h('td', { class: 'tot' }, `${total} (${relScore(total, parPlayed)})`),
+        h('td', { class: 'tot' }, `${total} (${relScore(total, parPlayed)})`),
+      online ? pingCell(e) : null,
     );
   });
   return h(
@@ -538,5 +553,14 @@ export function scorecard(course: Course, score: ScoreState, players: SessionPla
     { class: 'scorecard panel' },
     h('div', { class: 'sc-title' }, `${course.name} — ${MODE_INFO[score.mode].label}`),
     h('table', {}, head, pars, ...rows),
+    online && score.entrants.includes('team')
+      ? h(
+          'div',
+          { class: 'sc-pings' },
+          ...players.map((p) =>
+            h('span', { class: `ping ${pingClass(p)}` }, `${p.name} ${pingLabel(p, true) ?? '—'}`),
+          ),
+        )
+      : null,
   );
 }

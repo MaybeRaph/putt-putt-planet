@@ -27,6 +27,7 @@ import {
   wall,
   zone,
   dome,
+  riser,
 } from '../courses/builder';
 import { hashString, pick, range, rng } from '../rng';
 import { MAX_DEPTH, countLevel, type OmenId, type RewardId, type StageSpec, type TrinketId } from './defs';
@@ -1032,6 +1033,10 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           push(at(a + fall, lo), 'drop');
           // The lower green tucks back under the ledge so a slow ball can't fall between them.
           extraSolids.push(beam(at(a - 0.3, lo), at(a + fall, lo), W, FLOOR_T, 'floor'));
+          // The face under the ledge is solid down to that green (its face 3 mm proud of the
+          // skirt so they don't z-fight): a ball putted back at the ledge bounces off it instead
+          // of rolling in under the upper green through the drawn earth.
+          extraSolids.push(riser(at(a - 0.3, lo), at(a + 0.003, lo), W, y - FLOOR_T, lo));
           const c = at(a + fall / 2, y - D / steps / 2 + 0.25);
           collectibles.push(item(holeId, 'coin', c[0], c[1], c[2]));
           a += fall + 2;
@@ -1043,6 +1048,10 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         break;
       }
       case 'leap': {
+        /** The landing ledge's face is solid from its slab down to the run-in's level (see riser). */
+        const ledgeFace = (d: number) => {
+          if (E[1] - y0 > 0.02) extraSolids.push(riser(at(d - 0.003, y0), at(d + 0.3, y0), W, E[1] - FLOOR_T, y0 - FLOOR_T));
+        };
         if (L.spring) {
           // A spring pad pops the ball up onto a ledge a metre higher across the water. Too soft
           // and it drops short; too hard and it smacks into the ledge's face.
@@ -1056,6 +1065,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
           push(K0, 'landing');
           push(G, 'gap');
           push(E, 'landing');
+          ledgeFace(runIn + pad + gap);
           const pc = at(runIn + pad / 2, y0);
           zones.push(zone('spring', pc[0], pc[2], pad, W - 0.2, y0, { strength: 5.6, ...rot }));
           const gm: Vec3 = [(K0[0] + G[0]) / 2, y0, (K0[2] + G[2]) / 2];
@@ -1084,6 +1094,7 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         push(K1, 'kicker');
         push(G, 'gap');
         push(E, 'landing');
+        ledgeFace(runIn + kick + gap);
         const gm: Vec3 = [(K1[0] + G[0]) / 2, y0, (K1[2] + G[2]) / 2];
         zones.push(zone('water', gm[0], gm[2], gap + 0.3, W + 3, y0, rot));
         if (world === 'space')

@@ -149,6 +149,8 @@ app.whenReady().then(() => {
   ipcMain.handle('clipboard:write', (_e, text: unknown) => clipboard.writeText(String(text)));
   ipcMain.handle('display:get', () => currentMode());
   ipcMain.handle('display:set', (_e, mode: unknown) => setDisplayMode(mode === 'fullscreen' ? 'fullscreen' : 'windowed'));
+  // Quit to desktop: a full quit on every platform (macOS included); before-quit stops the LAN server.
+  ipcMain.handle('app:quit', () => app.quit());
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([

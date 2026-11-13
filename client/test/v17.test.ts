@@ -1,8 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import * as THREE from 'three';
-import { COURSES, type Vec3 } from '@ppp/shared';
-import { HoleIntro, INTRO, introDuration } from '../src/rendering/HoleIntro';
 
 const json = (rel: string) => JSON.parse(readFileSync(new URL(rel, import.meta.url), 'utf8'));
 
@@ -29,88 +26,7 @@ describe('game version', () => {
   });
 });
 
-describe('hole intro flyover', () => {
-  const path: Vec3[] = [
-    [0, 0, 0],
-    [8, 0, 0],
-    [8, 1, 9],
-    [20, 1, 9],
-  ];
-  const gamePos = new THREE.Vector3(-4, 2.1, 0);
-  const gameLook = new THREE.Vector3(0, 0.25, 0);
-  const run = (intro: HoleIntro, cam: THREE.PerspectiveCamera, until: () => boolean, dt = 1 / 60) => {
-    let t = 0;
-    while (!until() && t < 20) {
-      intro.update(dt, cam, gamePos, gameLook);
-      t += dt;
-    }
-    return t;
-  };
-
-  it('lasts 3 to 5 seconds whatever the hole', () => {
-    expect(introDuration(2)).toBe(INTRO.min);
-    expect(introDuration(500)).toBe(INTRO.max);
-    for (const c of COURSES)
-      for (const h of c.holes) {
-        const d = new HoleIntro(h.path).duration;
-        expect(d).toBeGreaterThanOrEqual(3);
-        expect(d).toBeLessThanOrEqual(5);
-      }
-  });
-
-  it('flies from the tee to the cup, then ends exactly on the gameplay camera', () => {
-    const cam = new THREE.PerspectiveCamera();
-    const intro = new HoleIntro(path);
-    intro.update(1 / 60, cam, gamePos, gameLook);
-    // Starts over the tee end, looking down the hole.
-    expect(intro.look.distanceTo(new THREE.Vector3(0, 0.3, 0))).toBeLessThan(4.5);
-    expect(cam.position.y).toBeGreaterThan(3);
-    // By the end of the outward leg the view has reached the cup.
-    let closest = Infinity;
-    let prev = cam.position.clone();
-    let maxStep = 0;
-    const t = run(intro, cam, () => {
-      closest = Math.min(closest, intro.look.distanceTo(new THREE.Vector3(20, 1.3, 9)));
-      maxStep = Math.max(maxStep, cam.position.distanceTo(prev));
-      prev = cam.position.clone();
-      return intro.done;
-    });
-    expect(closest).toBeLessThan(0.5);
-    expect(t).toBeGreaterThan(intro.duration - 0.1);
-    expect(t).toBeLessThan(intro.duration + 0.1);
-    // No jump anywhere, including the hand-over: the camera never moves more than a metre a frame.
-    expect(maxStep).toBeLessThan(1);
-    expect(cam.position.distanceTo(gamePos)).toBeLessThan(1e-6);
-    const fwd = cam.getWorldDirection(new THREE.Vector3());
-    expect(fwd.angleTo(gameLook.clone().sub(gamePos).normalize())).toBeLessThan(1e-4);
-  });
-
-  it('can be skipped at any moment and still lands on the gameplay camera without a cut', () => {
-    for (const at of [0.05, 1.2, 3.3]) {
-      const cam = new THREE.PerspectiveCamera();
-      const intro = new HoleIntro(path);
-      run(intro, cam, () => false, at / 10); // ten steps up to the skip
-      const before = cam.position.clone();
-      intro.skip();
-      intro.skip(); // a second key press changes nothing
-      intro.update(1 / 60, cam, gamePos, gameLook);
-      expect(cam.position.distanceTo(before)).toBeLessThan(1.2);
-      const t = run(intro, cam, () => intro.done);
-      expect(t).toBeLessThanOrEqual(INTRO.skip + 0.05);
-      expect(cam.position.distanceTo(gamePos)).toBeLessThan(1e-6);
-    }
-  });
-
-  it('copes with degenerate paths', () => {
-    const cam = new THREE.PerspectiveCamera();
-    const intro = new HoleIntro([
-      [1, 0, 1],
-      [1, 0, 1],
-    ]);
-    run(intro, cam, () => intro.done);
-    expect(Number.isFinite(cam.position.x + cam.position.y + cam.position.z)).toBe(true);
-  });
-});
+// The hole intro was reworked in v1.7.1: see v171.test.ts.
 
 describe('network client', () => {
   it('ignores a link that has been replaced', async () => {

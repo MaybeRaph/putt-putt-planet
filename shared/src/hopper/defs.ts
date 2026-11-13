@@ -246,6 +246,11 @@ export const HopperStateSchema = z.object({
       options: z.array(ChoiceOptionSchema).max(4),
       votes: z.record(z.string(), z.number().int()),
       secondsLeft: z.number(),
+      /**
+       * The option a strict majority of connected players is on right now (3+ players), which
+       * cut the countdown to MAJORITY_SECONDS. Optional: older peers neither send nor need it.
+       */
+      majority: z.number().int().optional(),
     })
     .nullable(),
   /** Hearts gained/lost on the last finished hole: entrant -> delta, plus the team net. */
