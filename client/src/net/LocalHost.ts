@@ -102,26 +102,40 @@ export class LocalHost {
     const peer: { pc: RTCPeerConnection; invite: Invite; conn?: Conn } = { pc, invite };
     this.peers.set(id, peer);
 
-    dc.onopen = () => {
+    // The connection and the message handler exist from the start, not from `open`: Chromium
+    // (seen on Windows 11) can deliver the guest's first messages — its hello and joinRoom, sent
+    // the instant its side opens — before this side's `open` event runs. A handler attached in
+    // `onopen` missed them, so the guest was never identified and the host answered everything
+    // it sent afterwards (Ready included) with "Say hello first".
+    // Replies to those early messages wait here until the channel reports itself open.
+    const early: string[] = [];
+    const conn = newConn(
+      (d) => {
+        if (dc.readyState === 'open') dc.send(d);
+        else if (dc.readyState === 'connecting' && early.length < 256) early.push(d);
+      },
+      () => dc.close(),
+    );
+    peer.conn = conn;
+    const linkOpen = () => {
+      if (dc.readyState === 'open') for (const d of early.splice(0)) dc.send(d);
+      if (invite.state === 'connected') return;
       console.info(`[direct] invite #${id}: link open`);
       invite.state = 'connected';
-      const conn = newConn(
-        (d) => dc.readyState === 'open' && dc.send(d),
-        () => dc.close(),
-      );
-      peer.conn = conn;
-      dc.onmessage = (e) => {
-        if (!this.lobby.onMessage(conn, String(e.data))) dc.close();
-        if (!invite.name && conn.profile) {
-          invite.name = conn.profile.name;
-          this.emit();
-        }
-      };
       this.emit();
+    };
+    dc.onopen = linkOpen;
+    dc.onmessage = (e) => {
+      linkOpen();
+      if (!this.lobby.onMessage(conn, String(e.data))) dc.close();
+      if (!invite.name && conn.profile) {
+        invite.name = conn.profile.name;
+        this.emit();
+      }
     };
     dc.onclose = () => {
       console.info(`[direct] invite #${id}: link closed`);
-      if (peer.conn) this.lobby.onClose(peer.conn);
+      this.lobby.onClose(conn);
       invite.state = 'closed';
       this.emit();
     };

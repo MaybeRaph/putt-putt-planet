@@ -27,7 +27,8 @@ export const C2S = z.discriminatedUnion('t', [
   z.object({ t: z.literal('leaveRoom') }),
   z.object({ t: z.literal('ready'), ready: z.boolean() }),
   z.object({ t: z.literal('configure'), courseId: id, mode: OnlineModeSchema, chaos: z.boolean() }),
-  z.object({ t: z.literal('start') }),
+  /** Host only. `force` starts without waiting for everyone to ready up. */
+  z.object({ t: z.literal('start'), force: z.boolean().optional() }),
   /** Host only: remove a player from the room. */
   z.object({ t: z.literal('kick'), id }),
   z.object({

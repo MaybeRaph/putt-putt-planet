@@ -2099,6 +2099,12 @@ select:focus {
   background: rgba(20, 32, 54, 0.55);
   backdrop-filter: blur(6px);
 }
+/* Host: start without waiting for everyone to ready up. */
+.btn.force-start {
+  flex: 0 1 auto;
+  background: #fff4c7;
+  color: #8a5300;
+}
 .lp {
   position: relative;
 }

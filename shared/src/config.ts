@@ -147,6 +147,11 @@ export const NET = {
   /** Client renders remote state this far in the past (ms). */
   interpDelayMs: 110,
   pingIntervalMs: 2000,
-  maxMessageBytes: 4096,
+  /**
+   * Largest message a host accepts; anything bigger drops the link. `hello` and `profile` carry
+   * the whole profile, which the schema lets grow far past the old 4 KB (up to 2000 collectibles,
+   * 500 cosmetics, 200 achievements), so a long-time player's link used to be cut on joining.
+   */
+  maxMessageBytes: 256 * 1024,
   maxMessagesPerSec: 60,
 } as const;

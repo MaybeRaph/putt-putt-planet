@@ -281,6 +281,23 @@ export class Game {
   localHost: LocalHost | null = null;
   /** LAN server addresses when hosting on the local network (desktop app). */
   lanAddresses: string[] = [];
+  /** Room we last asked to join, so a lost join can be repeated (see sayHelloAgain). */
+  private joinCode: string | null = null;
+  private lastRehello = 0;
+
+  /**
+   * The host answered "Say hello first": it never got our hello (and so not our joinRoom either),
+   * and it will ignore everything else we send, Ready included, until it does. Say it again.
+   */
+  private sayHelloAgain(): void {
+    const now = performance.now();
+    if (now - this.lastRehello < 1500) return; // every ping draws the same error until it lands
+    this.lastRehello = now;
+    const code = this.room?.code ?? this.joinCode;
+    console.warn(`[net] the host doesn't know us yet: saying hello again${code ? `, then joining ${code}` : ''}`);
+    this.net.hello();
+    if (code) this.net.send({ t: 'joinRoom', code });
+  }
 
   /** Point the client back at the dedicated server and drop any direct-play state. */
   private endDirect(): void {
@@ -322,6 +339,7 @@ export class Game {
       console.info('[direct] link to the host is open, joining the room');
       this.net.useTarget({ kind: 'peer', channel: dc });
       await this.net.connect(8000);
+      this.joinCode = invite.room ?? null;
       if (invite.room) this.net.send({ t: 'joinRoom', code: invite.room });
     });
     return { reply, hostName: invite.host ?? 'your friend', connected };
@@ -333,7 +351,8 @@ export class Game {
     this.net.useTarget({ kind: 'server', url: NetClient.addressUrl(address) });
     try {
       await this.connect();
-      this.net.send({ t: 'joinRoom', code: code.trim().toUpperCase() });
+      this.joinCode = code.trim().toUpperCase();
+      this.net.send({ t: 'joinRoom', code: this.joinCode });
     } catch (e) {
       this.ui.toast(`${(e as Error).message}. Check the address and that you're on the same network.`, 'bad', 5000);
       this.endDirect();
@@ -383,7 +402,8 @@ export class Game {
     this.useDefaultServer();
     try {
       await this.connect();
-      this.net.send({ t: 'joinRoom', code: code.trim().toUpperCase() });
+      this.joinCode = code.trim().toUpperCase();
+      this.net.send({ t: 'joinRoom', code: this.joinCode });
     } catch (e) {
       this.ui.toast((e as Error).message, 'bad');
     }
@@ -415,6 +435,7 @@ export class Game {
         // Removed by the host: back to the menu with a message that stays until dismissed.
         const direct = this.net.kind !== 'server' || !this.net.isDefaultServer;
         this.room = null;
+        this.joinCode = null;
         this.screens.inLobbySub = false;
         if (this.net.kind === 'server') this.net.token = null;
         if (direct) {
@@ -427,6 +448,7 @@ export class Game {
       }
       case 'left':
         this.room = null;
+        this.joinCode = null;
         this.screens.inLobbySub = false;
         if (this.state === 'lobby') this.screens.multiplayer();
         break;
@@ -454,6 +476,10 @@ export class Game {
         this.screens.onDailyBoard();
         break;
       case 'error':
+        if (m.code === 'no_hello') {
+          this.sayHelloAgain();
+          break;
+        }
         if (this.state === 'playing' && this.scene) this.scene.hud.message(m.message, 'bad', 2500);
         else this.ui.toast(m.message, 'bad');
         break;
@@ -468,6 +494,7 @@ export class Game {
   leaveOnline(): void {
     this.net.send({ t: 'leaveRoom' });
     this.room = null;
+    this.joinCode = null;
     if (this.net.kind === 'server') this.net.token = null;
     if (this.net.kind !== 'server' || !this.net.isDefaultServer) {
       this.net.disconnect();

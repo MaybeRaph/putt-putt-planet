@@ -455,6 +455,81 @@ export class Screens {
   /** What the lobby on screen was drawn from (everything except pings). */
   private lobbyKey = '';
   private lastReadyClick = 0;
+  /** Ready state this guest asked for that the host hasn't confirmed yet (null: none pending). */
+  private readyWant: boolean | null = null;
+  private readyRetry = 0;
+
+  /**
+   * Guest: ask the host to (un)ready us, and keep asking until its room update says so. The
+   * button flips at once; if the host never confirms (a lost message, a link that is up but not
+   * delivering), say so instead of silently doing nothing.
+   */
+  private sendReady(ready: boolean): void {
+    const g = this.game;
+    this.readyWant = ready;
+    clearTimeout(this.readyRetry);
+    let tries = 0;
+    const attempt = () => {
+      if (!g.room || this.readyWant !== ready) return; // left the room, or changed their mind
+      const cur = g.room.players.find((p) => p.id === g.profile.profile.id);
+      if (cur?.ready === ready) {
+        this.readyWant = null;
+        return;
+      }
+      if (tries === 4) {
+        this.readyWant = null;
+        g.ui.toast("The host isn't getting your Ready. Ask them to force start, or leave and join again", 'bad', 6000);
+        this.lobbyKey = ''; // redraw from the host's view of us
+        if (g.state === 'lobby' && !this.inLobbySub) this.lobby();
+        return;
+      }
+      tries++;
+      console.info(`[lobby] ready -> ${ready} (try ${tries}, link ${g.net.status}, in room: ${!!cur})`);
+      if (tries === 1 && g.net.status !== 'online') g.ui.toast('Not connected to the host — leave and join again', 'bad', 4000);
+      g.net.send({ t: 'ready', ready });
+      this.readyRetry = window.setTimeout(attempt, 1500);
+    };
+    attempt();
+  }
+
+  /** Host: start now, even though some players haven't readied up (they still play). */
+  private confirmForceStart(): void {
+    const g = this.game;
+    const room = g.room;
+    if (!room) return;
+    const waiting = room.players.filter((p) => p.id !== room.hostId && p.connected && !p.ready).map((p) => p.name);
+    const close = () => g.ui.showOverlay(null);
+    g.ui.showOverlay(
+      h(
+        'div',
+        { class: 'modal notice' },
+        h('h2', {}, 'Start without waiting?'),
+        h(
+          'p',
+          { class: 'center muted' },
+          waiting.length
+            ? `${waiting.join(', ')} ${waiting.length === 1 ? "hasn't" : "haven't"} readied up yet. They'll still play.`
+            : 'Everyone is ready.',
+        ),
+        h(
+          'div',
+          { class: 'row' },
+          h(
+            'button',
+            {
+              class: 'btn primary',
+              onclick: () => {
+                close();
+                g.net.send({ t: 'start', force: true });
+              },
+            },
+            '⚡ Start now',
+          ),
+          h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        ),
+      ),
+    );
+  }
 
   /** A message that stays until dismissed (e.g. "the host removed you"). */
   notice(title: string, text: string): void {
@@ -534,6 +609,9 @@ export class Screens {
     const me = g.profile.profile.id;
     const isHost = room.hostId === me;
     const meP = room.players.find((p) => p.id === me);
+    if (this.readyWant !== null && meP?.ready === this.readyWant) this.readyWant = null;
+    // Until the host confirms a Ready click, show what was asked for (it is retried meanwhile).
+    const meReady = this.readyWant ?? !!meP?.ready;
     // The host re-sends the room every few seconds (fresh pings). Rebuilding the whole screen each
     // time swallowed clicks that straddled a rebuild and closed open menus, so when nothing but
     // the pings changed, just update those in place.
@@ -541,6 +619,7 @@ export class Screens {
       { ...room, players: room.players.map((p) => ({ ...p, ping: 0 })) },
       me,
       g.net.kind,
+      meReady,
       g.lanAddresses,
       !!g.localHost,
       this.p.level,
@@ -698,29 +777,43 @@ export class Screens {
           'div',
           { class: 'row center lobby-actions' },
           isHost
-            ? h(
-                'button',
-                { class: 'btn primary big', disabled: !allReady, onclick: () => g.net.send({ t: 'start' }) },
-                allReady ? '▶ Start game' : 'Waiting for players to ready up…',
-              )
+            ? [
+                h(
+                  'button',
+                  { class: 'btn primary big', disabled: !allReady, onclick: () => g.net.send({ t: 'start' }) },
+                  allReady ? '▶ Start game' : 'Waiting for players to ready up…',
+                ),
+                allReady
+                  ? null
+                  : h(
+                      'button',
+                      {
+                        class: 'btn big force-start',
+                        title: 'Start now without waiting for everyone to ready up',
+                        onclick: () => this.confirmForceStart(),
+                      },
+                      '⚡ Force start',
+                    ),
+              ]
             : h(
                 'button',
                 {
-                  class: `btn big ready-btn ${meP?.ready ? '' : 'primary'}`,
-                  onclick: () => {
-                    // Decide from the room as it is now (not as it was when this button was drawn),
-                    // and ignore the second half of a double-click so it can't undo the first.
+                  class: `btn big ready-btn ${meReady ? '' : 'primary'}`,
+                  onclick: (e: Event) => {
+                    // Decide from the latest state (a pending click counts, so a second click
+                    // undoes it), and ignore the second half of a double-click.
                     const now = performance.now();
                     if (now - this.lastReadyClick < 400) return;
                     this.lastReadyClick = now;
                     const cur = g.room?.players.find((p) => p.id === g.profile.profile.id);
-                    const ready = !cur?.ready;
-                    console.info(`[lobby] ready -> ${ready} (link ${g.net.status}, in room: ${!!cur})`);
-                    if (g.net.status !== 'online') g.ui.toast('Not connected to the host — leave and join again', 'bad', 4000);
-                    g.net.send({ t: 'ready', ready });
+                    const ready = !(this.readyWant ?? !!cur?.ready);
+                    const btn = e.currentTarget as HTMLButtonElement;
+                    btn.textContent = ready ? 'Not ready' : '✓ Ready!';
+                    btn.classList.toggle('primary', !ready);
+                    this.sendReady(ready);
                   },
                 },
-                meP?.ready ? 'Not ready' : '✓ Ready!',
+                meReady ? 'Not ready' : '✓ Ready!',
               ),
           h('button', { class: 'btn', onclick: () => {
             this.locker(() => g.returnToLobby());

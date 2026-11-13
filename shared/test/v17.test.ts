@@ -228,6 +228,70 @@ describe('v1.7 lobby: ready state', () => {
   });
 });
 
+describe('v1.7.2 force start and lost hellos', () => {
+  it('lets the host start without waiting, but only the host, and only when asked', () => {
+    const lobby = new Lobby(memoryStorage(), false, { daily: false });
+    const {
+      conns: [host, guest, other],
+      room,
+    } = party(lobby, ['Hana', 'Gus', 'Ola']);
+    other.send({ t: 'ready', ready: true });
+    host.send({ t: 'start' });
+    expect(host.last('error')?.code).toBe('not_ready');
+    expect(room.phase).toBe('lobby');
+    guest.send({ t: 'start', force: true });
+    expect(guest.last('error')?.code).toBe('not_allowed');
+    expect(room.phase).toBe('lobby');
+    host.send({ t: 'start', force: true });
+    expect(room.phase).toBe('playing');
+    // The player who never readied up still plays.
+    expect(guest.last('matchStart')!.players.map((p) => p.id)).toContain('g_gus');
+    expect(other.last('chat')?.text).toBe('Hana started without waiting for Gus');
+    expect(parseC2S({ t: 'start' })).toEqual({ t: 'start' });
+    expect(parseC2S({ t: 'start', force: 'yes' })).toBeNull();
+    lobby.shutdown();
+  });
+
+  it('a guest whose hello was lost can say it again and still ready up', () => {
+    const lobby = new Lobby(memoryStorage(), false, { daily: false });
+    const {
+      conns: [host],
+      code,
+    } = party(lobby, ['Hana']);
+    const gus = fakeConn(lobby);
+    // hello + joinRoom never arrived: the host answers everything else with no_hello.
+    gus.send({ t: 'ready', ready: true });
+    expect(gus.last('error')?.code).toBe('no_hello');
+    // What the client now does on no_hello.
+    gus.send({ t: 'hello', profile: defaultProfile('g_gus', 'Gus') });
+    gus.send({ t: 'joinRoom', code });
+    gus.send({ t: 'ready', ready: true });
+    expect(host.last('room')!.room.players.find((p) => p.id === 'g_gus')!.ready).toBe(true);
+    // Saying it twice (the retry raced the original) keeps one seat.
+    gus.send({ t: 'hello', profile: defaultProfile('g_gus', 'Gus') });
+    gus.send({ t: 'joinRoom', code });
+    expect(host.last('room')!.room.players.filter((p) => p.id === 'g_gus')).toHaveLength(1);
+    lobby.shutdown();
+  });
+
+  it("accepts a long-time player's profile (well over the old 4 KB limit)", () => {
+    const lobby = new Lobby(memoryStorage(), false, { daily: false });
+    const {
+      conns: [host],
+      code,
+    } = party(lobby, ['Hana']);
+    const big = defaultProfile('g_vet', 'Vet');
+    big.collected = Array.from({ length: 400 }, (_, i) => `meadow.h${i % 9}.gem.${i}`);
+    const vet = fakeConn(lobby);
+    expect(JSON.stringify({ t: 'hello', profile: big }).length).toBeGreaterThan(4096);
+    vet.send({ t: 'hello', profile: big });
+    vet.send({ t: 'joinRoom', code });
+    expect(vet.isClosed()).toBe(false);
+    expect(host.last('room')!.room.players.some((p) => p.id === 'g_vet')).toBe(true);
+    lobby.shutdown();
+  });
+});
+
 describe('v1.7 kick', () => {
   it('is part of the protocol', () => {
     expect(parseC2S({ t: 'kick', id: 'g_x' })).toEqual({ t: 'kick', id: 'g_x' });

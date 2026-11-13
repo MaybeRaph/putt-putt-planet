@@ -196,9 +196,7 @@ export class NetClient {
     tr.onopen = () => {
       if (!current()) return;
       this.retry = 0;
-      // Room tokens only make sense on the server that issued them.
-      const token = this.target.kind === 'server' ? (this.token ?? undefined) : undefined;
-      this.sendNow({ t: 'hello', profile: this.getProfile(), token });
+      this.hello();
       this.setStatus('online');
       clearInterval(this.pingTimer);
       this.pingTimer = window.setInterval(
@@ -215,6 +213,16 @@ export class NetClient {
       // Direct (peer) links can't be re-dialled without new codes; servers can.
       if (this.wantOpen && this.target.kind === 'server') this.scheduleReconnect();
     };
+  }
+
+  /**
+   * Introduce this player to the host. Sent when a link opens, and again if the host says it
+   * never heard us ("Say hello first": our first messages were lost on the way in).
+   */
+  hello(): void {
+    // Room tokens only make sense on the server that issued them.
+    const token = this.target.kind === 'server' ? (this.token ?? undefined) : undefined;
+    this.sendNow({ t: 'hello', profile: this.getProfile(), token });
   }
 
   private scheduleReconnect(): void {

@@ -247,12 +247,10 @@ export class Room {
         const notReady = [...this.members.values()].filter(
           (x) => x.id !== this.hostId && x.disconnectedAt === null && !x.ready,
         );
-        if (notReady.length)
-          return this.error(
-            m,
-            'not_ready',
-            `Waiting for ${notReady.map((x) => x.name).join(', ')} to ready up`,
-          );
+        const names = notReady.map((x) => x.name).join(', ');
+        // The host may skip the wait (force start): useful when a guest can't or won't ready up.
+        if (notReady.length && !msg.force) return this.error(m, 'not_ready', `Waiting for ${names} to ready up`);
+        if (notReady.length) this.broadcastSys(`${m.name} started without waiting for ${names}`);
         this.startMatch();
         break;
       }
