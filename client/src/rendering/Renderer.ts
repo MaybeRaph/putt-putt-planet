@@ -5,12 +5,27 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { FXAAPass } from 'three/addons/postprocessing/FXAAPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import type { Theme } from '@ppp/shared';
 import { Ambience } from './Ambience';
 import { setNatureEnabled, tickNature } from './nature';
 import { SKY, SKY_FRAG, SKY_VERT } from './sky';
 
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
+/** Anti-aliasing setting: the preset's own choice, or a fixed method. */
+export type AntiAlias = 'auto' | 'off' | 'fxaa' | 'msaa2' | 'msaa4' | 'msaa8' | 'smaa';
+type EdgeFilter = 'none' | 'fxaa' | 'smaa';
+
+/** What each anti-aliasing choice means: MSAA samples on the scene, plus an edge filter pass. */
+const AA: Record<Exclude<AntiAlias, 'auto'>, { samples: number; filter: EdgeFilter }> = {
+  off: { samples: 0, filter: 'none' },
+  fxaa: { samples: 0, filter: 'fxaa' },
+  msaa2: { samples: 2, filter: 'none' },
+  msaa4: { samples: 4, filter: 'none' },
+  msaa8: { samples: 8, filter: 'none' },
+  smaa: { samples: 4, filter: 'smaa' },
+};
 
 interface Tier {
   /** Max device pixel ratio. */
@@ -19,8 +34,14 @@ interface Tier {
   shadow: number;
   /** Softening of shadow edges (texels). */
   shadowRadius: number;
-  /** MSAA samples on the scene render target. */
+  /** MSAA samples on the scene render target ("Auto" anti-aliasing). */
   samples: number;
+  /** Edge filter after tone mapping ("Auto" anti-aliasing): smooths what MSAA can't, such as
+   * the cut-out edges of leaves. */
+  filter: EdgeFilter;
+  /** Scenery density and grass blades on the courses. */
+  decor: number;
+  grass: number;
   /** Ambient occlusion resolution scale (0 = off). */
   ao: number;
   bloom: boolean;
@@ -42,10 +63,12 @@ interface Tier {
  * Tuned for v1.8 on an Apple M2 at 1440x810 (Retina), meadow hole 6 (frame times, GPU-synced):
  *  - Low     ~2 ms   classic procedural props, no shadows or post effects (weak/mobile GPUs).
  *  - Medium  ~13 ms  stylised models, painted sky, shadows; no AO or bloom.
- *  - High    ~16 ms  + 4x MSAA, softer shadows, bloom, motes, denser grass. Screen-space AO cost
+ *  - High    ~21 ms  + 4x MSAA, softer shadows, bloom, motes, denser grass. Screen-space AO cost
  *                    ~12 ms here and was nearly invisible under the stylised shading (the
  *                    canopies carry baked depth), so High leaves it out.
  *  - Ultra   2x pixel ratio, half-res AO, 4096 shadows, tilt-shift: for big desktop GPUs.
+ * "Auto" anti-aliasing per tier: Low 2x MSAA, Medium 2x MSAA + FXAA, High and Ultra 4x MSAA +
+ * SMAA (the edge filter smooths the alpha-tested leaves, which MSAA alone leaves jagged).
  */
 export const TIERS: Record<Quality, Tier> = {
   low: {
@@ -53,6 +76,9 @@ export const TIERS: Record<Quality, Tier> = {
     shadow: 0,
     shadowRadius: 1,
     samples: 2,
+    filter: 'none',
+    decor: 0.5,
+    grass: 0,
     ao: 0,
     bloom: false,
     grade: false,
@@ -66,6 +92,9 @@ export const TIERS: Record<Quality, Tier> = {
     shadow: 2048,
     shadowRadius: 1,
     samples: 2,
+    filter: 'fxaa',
+    decor: 1,
+    grass: 16000,
     ao: 0,
     bloom: false,
     grade: true,
@@ -79,6 +108,9 @@ export const TIERS: Record<Quality, Tier> = {
     shadow: 2048,
     shadowRadius: 2,
     samples: 4,
+    filter: 'smaa',
+    decor: 1,
+    grass: 40000,
     ao: 0,
     bloom: true,
     grade: true,
@@ -92,6 +124,9 @@ export const TIERS: Record<Quality, Tier> = {
     shadow: 4096,
     shadowRadius: 3,
     samples: 4,
+    filter: 'smaa',
+    decor: 1.3,
+    grass: 70000,
     ao: 0.5,
     bloom: true,
     grade: true,
@@ -153,7 +188,8 @@ const GradeShader = {
 
 /**
  * Film grain, applied last on the display image (after tone mapping) so it reads like real
- * film: fresh noise 24 times a second, about one screen pixel big, strongest in the midtones.
+ * film: a fresh pattern every frame (uTime is a frame counter; v1.8.0 held each pattern for
+ * several frames, which strobed), about one screen pixel big, strongest in the midtones.
  */
 const GrainShader = {
   uniforms: {
@@ -169,7 +205,7 @@ const GrainShader = {
     void main(){
       vec4 c = texture2D(tDiffuse, vUv);
       vec2 px = floor(vUv * uRes / uSize);
-      float t = floor(uTime * 24.0);
+      float t = uTime;
       float n = hash(vec3(px, t)) + hash(vec3(px + 17.0, t + 3.0)) - 1.0;
       float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
       c.rgb += n * uAmount * (0.4 + 0.6 * (1.0 - abs(l - 0.5) * 1.5));
@@ -193,6 +229,10 @@ export class Renderer {
   private gtao: GTAOPass | null = null;
   private tilt: ShaderPass | null = null;
   private grain: ShaderPass | null = null;
+  /** Anti-aliasing setting (auto = the quality tier's choice). */
+  private aa: AntiAlias = 'auto';
+  /** Frame counter: the film grain gets a fresh pattern every frame. */
+  private frame = 0;
   /** Film grain 0..100 (0 = off). */
   private grainLevel = 0;
   private readonly ambience = new Ambience();
@@ -304,7 +344,9 @@ export class Renderer {
     // renderTarget2); the ping-pong partner stays single-sampled.
     const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType });
     this.composer = new EffectComposer(this.gl, rt);
-    this.composer.renderTarget2.samples = T.samples;
+    const aa = this.aa === 'auto' ? { samples: T.samples, filter: T.filter } : AA[this.aa];
+    const glc = this.gl.getContext() as WebGL2RenderingContext;
+    this.composer.renderTarget2.samples = Math.min(aa.samples, glc.getParameter(glc.MAX_SAMPLES) as number);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     if (T.ao) {
       const gtao = new GTAOPass(this.scene, this.camera, size.x * T.ao, size.y * T.ao);
@@ -335,6 +377,9 @@ export class Renderer {
     }
     if (T.grade) this.composer.addPass(new ShaderPass(GradeShader));
     this.composer.addPass(new OutputPass());
+    // Edge filters work on the final display image (after tone mapping), before the grain.
+    if (aa.filter === 'fxaa') this.composer.addPass(new FXAAPass());
+    else if (aa.filter === 'smaa') this.composer.addPass(new SMAAPass());
     this.grain = new ShaderPass(GrainShader);
     this.composer.addPass(this.grain);
     this.setGrain(this.grainLevel);
@@ -346,12 +391,21 @@ export class Renderer {
     });
   }
 
+  /** Anti-aliasing method; rebuilds the post stack when it changes. */
+  setAntiAlias(aa: AntiAlias): void {
+    if (!(aa in AA) && aa !== 'auto') aa = 'auto';
+    if (aa === this.aa) return;
+    this.aa = aa;
+    this.setQuality(this.quality);
+  }
+
   /** Film grain strength, 0 (off) to 100. */
   setGrain(level: number): void {
     this.grainLevel = Math.max(0, Math.min(100, level || 0));
     if (!this.grain) return;
     this.grain.enabled = this.grainLevel > 0;
-    this.grain.uniforms.uAmount.value = Math.pow(this.grainLevel / 100, 1.3) * 0.17;
+    // v1.8.0 topped out at 0.17, far too strong; 100 is now a clearly visible but tasteful grain.
+    this.grain.uniforms.uAmount.value = Math.pow(this.grainLevel / 100, 1.2) * 0.055;
   }
 
   applyTheme(theme: Theme): void {
@@ -454,7 +508,8 @@ export class Renderer {
     this.time += dt;
     this.skyMat.uniforms.uTime.value = this.time;
     tickNature(this.time);
-    if (this.grain) this.grain.uniforms.uTime.value = this.time;
+    this.frame = (this.frame + 1) % 100000;
+    if (this.grain) this.grain.uniforms.uTime.value = this.frame;
     this.sky.position.copy(this.camera.position);
     this.ambience.update(
       this.time,
@@ -462,7 +517,14 @@ export class Renderer {
       this.scene.fog as THREE.Fog,
       window.innerHeight * this.gl.getPixelRatio(),
     );
-    if (this.composer) this.composer.render();
-    else this.gl.render(this.scene, this.camera);
+    if (this.composer) {
+      // The composer ping-pongs two buffers and only renderTarget2 is multisampled. With an odd
+      // number of swapping passes (Low's single OutputPass, or any tier plus the grain) the
+      // scene landed in the plain buffer every other frame, so edges flickered between smooth
+      // and jagged. Always start the frame from the multisampled buffer.
+      const c = this.composer;
+      if (c.readBuffer !== c.renderTarget2) c.swapBuffers();
+      c.render();
+    } else this.gl.render(this.scene, this.camera);
   }
 }

@@ -70,6 +70,7 @@ export class Game {
   constructor(container: HTMLElement) {
     this.settings = loadSettings();
     this.renderer = new Renderer(container);
+    this.renderer.setAntiAlias(this.settings.aa);
     this.renderer.setQuality(this.settings.quality);
     this.renderer.setGrain(this.settings.grain);
     this.ui = new UIRoot(container);
@@ -537,8 +538,13 @@ export class Game {
   applySettings(): void {
     saveSettings(this.settings);
     // Rebuilding the post stack is heavy: only when the tier actually changes (not on every
-    // slider tick elsewhere in the settings).
-    if (this.settings.quality !== this.renderer.quality) this.renderer.setQuality(this.settings.quality);
+    // slider tick elsewhere in the settings). The scenery is swapped at once, mid-hole included.
+    if (this.settings.quality !== this.renderer.quality) {
+      this.renderer.setQuality(this.settings.quality);
+      this.scene?.refreshGraphics();
+      this.backdrop?.refreshGraphics();
+    }
+    this.renderer.setAntiAlias(this.settings.aa);
     this.renderer.setGrain(this.settings.grain);
     audio.setVolumes(this.settings.master, this.settings.music, this.settings.sfx);
     if (this.scene) {

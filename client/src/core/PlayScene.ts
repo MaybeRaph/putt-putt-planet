@@ -3,6 +3,7 @@ import { DEFAULT_LOADOUT, PHYSICS, REST_CRATES, REWARDS, SKELETON, type MatchEve
 import type { Game } from './Game';
 import type { Session } from './Session';
 import { CourseView } from '../rendering/CourseView';
+import { TIERS } from '../rendering/Renderer';
 import { BallView } from '../rendering/BallView';
 import { CameraRig } from '../rendering/CameraRig';
 import { AimView } from '../rendering/AimView';
@@ -129,9 +130,10 @@ export class PlayScene {
     const course = this.session.course;
     const hole = course.holes[idx];
     const theme = hole.theme ?? course.theme;
+    const tier = TIERS[this.renderer.quality];
     this.view = new CourseView(hole, theme, {
-      decorDensity: { low: 0.5, medium: 1, high: 1, ultra: 1.3 }[this.game.settings.quality],
-      grass: { low: 0, medium: 16000, high: 40000, ultra: 70000 }[this.game.settings.quality],
+      decorDensity: tier.decor,
+      grass: tier.grass,
       ownedItems: this.game.profile.ownedCollectibles(),
     });
     this.view.syncItems(this.session.activeItems());
@@ -852,6 +854,13 @@ export class PlayScene {
       ...Object.entries(this.session.netStats()).map(([k, v]) => `${k}: ${v}`),
     ];
     (this.debugEl.querySelector('.dbg-stats') as HTMLElement).textContent = lines.join('\n');
+  }
+
+  /** Graphics quality changed: swap the scenery for the new tier now, not on the next hole. */
+  refreshGraphics(): void {
+    const tier = TIERS[this.renderer.quality];
+    this.view?.rebuildScenery(tier.decor, tier.grass);
+    this.particles.scale = this.renderer.quality === 'low' ? 0.5 : 1;
   }
 
   dispose(): void {

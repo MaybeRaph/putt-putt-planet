@@ -136,9 +136,13 @@ for (const mat of doc.getRoot().listMaterials()) {
       .toBuffer();
     img = sharp(mask);
   }
-  const webp = await img
-    .resize(size, size, { fit: 'fill' })
-    .webp({ quality: 88, alphaQuality: 90 })
+  // Resize first, then bleed the leaf colours out under the transparent area: texture filtering
+  // and mipmaps mix in the colour of see-through pixels, which otherwise darkens the cut edge.
+  // `exact` stops the WebP encoder throwing that hidden colour away again.
+  const raw = await img.resize(size, size, { fit: 'fill' }).raw().toBuffer();
+  bleed(raw, size, size);
+  const webp = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
+    .webp({ quality: 88, alphaQuality: 90, exact: true })
     .toBuffer();
   tex.setImage(new Uint8Array(webp)).setMimeType('image/webp').setURI(`${name}.webp`);
 }
@@ -167,6 +171,48 @@ const tris = doc
 console.log(
   `wrote ${out}: ${(fs.statSync(out).size / 1024).toFixed(0)} KB, ${MODELS.length} models, ${tris} triangles`,
 );
+
+/**
+ * Edge padding: repeatedly give each transparent pixel the average colour of its opaque (or
+ * already filled) neighbours, until the whole image has a colour. Alpha is left untouched.
+ */
+function bleed(px: Buffer, w: number, h: number): void {
+  const filled = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) filled[i] = px[i * 4 + 3] > 8 ? 1 : 0;
+  for (let pass = 0; pass < w; pass++) {
+    const next = filled.slice();
+    let changed = 0;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (filled[i]) continue;
+        let r = 0,
+          g = 0,
+          b = 0,
+          n = 0;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx,
+              yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+            const j = yy * w + xx;
+            if (!filled[j]) continue;
+            r += px[j * 4];
+            g += px[j * 4 + 1];
+            b += px[j * 4 + 2];
+            n++;
+          }
+        if (!n) continue;
+        px[i * 4] = r / n;
+        px[i * 4 + 1] = g / n;
+        px[i * 4 + 2] = b / n;
+        next[i] = 1;
+        changed++;
+      }
+    filled.set(next);
+    if (!changed) break;
+  }
+}
 
 /**
  * Canopy leaves: normals blended towards the direction out of the canopy (spherical for round

@@ -1,4 +1,4 @@
-import type { Quality } from '../rendering/Renderer';
+import type { AntiAlias, Quality } from '../rendering/Renderer';
 import type { Palette } from '../rendering/AimView';
 
 export type Action =
@@ -37,6 +37,8 @@ export interface Settings {
   music: number;
   sfx: number;
   quality: Quality;
+  /** Anti-aliasing method ('auto' = the quality preset's choice). */
+  aa: AntiAlias;
   /** Film grain filter strength, 0 (off) to 100. */
   grain: number;
   reducedMotion: boolean;
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   music: 0.5,
   sfx: 0.8,
   quality: isMobile ? 'medium' : 'high',
+  aa: 'auto',
   grain: 0,
   reducedMotion: typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches,
   palette: 'default',

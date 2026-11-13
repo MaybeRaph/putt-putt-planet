@@ -97,31 +97,62 @@ export class CourseView {
     const nearCourse = (x: number, z: number, margin: number) => foot.near(x, z, margin);
     const keepOut = (x: number, z: number, margin: number) =>
       foot.near(x, z, margin) || (Math.abs(x - bx) < 3 + margin && Math.abs(z - bz) < 3 + margin);
+    this.scenery = { nearCourse, keepOut };
+    this.buildScenery(opts.decorDensity ?? 1, opts.grass ?? 40000);
+  }
+
+  /** Footprint tests the scenery is placed with (kept so it can be rebuilt). */
+  private readonly scenery: {
+    nearCourse: (x: number, z: number, margin: number) => boolean;
+    keepOut: (x: number, z: number, margin: number) => boolean;
+  };
+  private decor: THREE.Group | null = null;
+
+  /** Terrain, grass and decor round the course. */
+  private buildScenery(decorDensity: number, grass: number): void {
+    const { hole, theme } = this;
     this.landscape = new Landscape({
       center: new THREE.Vector2((this.bounds.min.x + this.bounds.max.x) / 2, (this.bounds.min.z + this.bounds.max.z) / 2),
       half: new THREE.Vector2((this.bounds.max.x - this.bounds.min.x) / 2, (this.bounds.max.z - this.bounds.min.z) / 2),
       groundY: this.groundY,
       kit: theme.decorKit,
       seed: hashString(hole.id) % 100000,
-      keepOut: nearCourse,
-      grass: theme.decorKit === 'space' ? 0 : (opts.grass ?? 40000),
+      keepOut: this.scenery.nearCourse,
+      grass: theme.decorKit === 'space' ? 0 : grass,
       // No far mountains in thick fog (the Fog Bank omen hides everything past the course).
       haze: theme.fogFar < 40 ? undefined : { fog: theme.fog, sky: theme.skyBottom },
     });
     this.root.add(this.landscape.group);
-    const heightAt = this.landscape.heightAt;
-    const decor = buildDecor(
+    this.decor = buildDecor(
       hole.id,
       theme.decorKit,
       hole.decor,
       this.bounds,
-      keepOut,
+      this.scenery.keepOut,
       this.groundY,
-      opts.decorDensity ?? 1,
-      heightAt,
+      decorDensity,
+      this.landscape.heightAt,
     );
-    this.root.add(decor);
-    this.owned.push({ dispose: () => decor.children.forEach((c) => (c as THREE.InstancedMesh).dispose()) });
+    this.root.add(this.decor);
+  }
+
+  private disposeScenery(): void {
+    this.landscape?.dispose();
+    this.landscape = null;
+    if (this.decor) {
+      this.decor.removeFromParent();
+      this.decor.children.forEach((c) => (c as THREE.InstancedMesh).dispose());
+      this.decor = null;
+    }
+  }
+
+  /**
+   * Swap the scenery for the current graphics settings (classic or stylised models, density,
+   * grass) without touching the course itself, so a quality change shows at once mid-hole.
+   */
+  rebuildScenery(decorDensity: number, grass: number): void {
+    this.disposeScenery();
+    this.buildScenery(decorDensity, grass);
   }
 
   private own<T extends { dispose(): void }>(x: T): T {
@@ -1349,7 +1380,7 @@ export class CourseView {
   dispose(): void {
     this.toggleColliderDebug(false);
     this.root.removeFromParent();
-    this.landscape?.dispose();
+    this.disposeScenery();
     for (const o of this.owned) o.dispose();
     this.owned.length = 0;
   }

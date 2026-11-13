@@ -22,6 +22,7 @@
 | v1.7.1 solid ledges and bumps, Slick Greens grip +20%, Quit to desktop, ping on the scorecard + Show ping, slow single-pass hole intro, no intro on rest stops, majority votes | ✅ done (see below) |
 | v1.7.2 Windows 11 ready-up fix (lost first messages), host Force start, larger message limit | ✅ done (see below) |
 | v1.8 graphics overhaul: stylised CC0 scenery models, painted skies, stylised water, film grain, retuned presets | ✅ done (see below) |
+| v1.8.1 instant quality changes, clean leaf edges, anti-aliasing setting, grain flicker fix | ✅ done (see below) |
 
 **Next steps (not started):** real accounts/auth; persist rooms across server restarts; switch the client to the non-`compat` Rapier build (separate .wasm, ~1 MB smaller download); optional outline pass; hand-tuned pars from playtesting with humans (current pars are designer estimates, sanity-checked by the solver).
 
@@ -65,6 +66,12 @@
 - Tests: 40 (physics, rules, progression, protocol, course data + solver spot-checks, lobby/room integration, latency interpolation). `npm run validate:courses` sweeps all 45 holes.
 - Bug bash fixes: Esc couldn't resume (controls disabled while paused); solo sim kept running while paused; three r187 shadow-map deprecation.
 - Production: vendor chunk split (app 94 KB gz, three 150 KB, rapier 1.67 MB), inline boot splash for instant first paint, single-process server (static + ws), path-traversal guarded, standalone server bundle verified from an empty dir. Dockerfile written (Docker not installed on the dev machine, so the image build itself is untested).
+
+## v1.8.1 — graphics fixes (done)
+- **Quality applies at once**: `CourseView.rebuildScenery(density, grass)` swaps the landscape and decor in place (the course, balls and items are untouched); `PlayScene.refreshGraphics()` and `MenuBackdrop.refreshGraphics()` call it from `Game.applySettings` when the tier changes. Scenery density and grass now live in `TIERS` (one table for play and the menu). No leaks: 82 geometries / 33 textures before and after seven switches.
+- **Leaf edges**: the bright speckled rim round every branch (reported with a screenshot) came from alpha-to-coverage under the HDR post chain; with it off the rim was gone. Leaves now use a sharpened 0.5 alpha test, and canopies take only the texture's alpha (their colour is the palette), so nothing under the cut-out bleeds in. `build-nature.ts` also pads every texture's colour out under its transparent area (WebP `exact`), so ferns and flowers lose their dark fringes. Edges are smoothed by the new edge filters.
+- **Anti-aliasing setting** (`settings.aa`): Auto (Low 2x MSAA; Medium 2x + FXAA; High and Ultra 4x + SMAA), Off, FXAA, MSAA 2x/4x/8x (capped at the GPU's `MAX_SAMPLES`), SMAA + MSAA 4x. FXAA/SMAA run after tone mapping, before the grain.
+- **Grain flicker, root cause**: the composer ping-pongs two buffers and only `renderTarget2` is multisampled. With an odd number of swapping passes the scene was drawn into the plain buffer every other frame, so edges flickered between smooth and jagged. Turning grain on made the count odd on Medium and up; Low (one OutputPass) had flickered like this all along. `Renderer.render` now swaps back to the multisampled buffer before each frame (checked: 4 samples on every frame with an odd pass count). The grain also takes a fresh pattern every frame (it held each one for 2–3 frames, which strobed), and its top strength is about a third of v1.8.0 (0.055 vs 0.17).
 
 ## v1.8 — graphics overhaul (done)
 - **Art direction**: classic cartoon battle-royale (bright saturated colours, chunky layered pines, puffy lime canopies, warm painted cliffs, hazy blue distance, big soft clouds, glassy blue water).

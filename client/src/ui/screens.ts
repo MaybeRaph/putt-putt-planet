@@ -1202,7 +1202,7 @@ export class Screens {
           },
         }),
       );
-    const select = <K extends 'quality' | 'palette'>(label: string, key: K, opts: [Settings[K], string][]) =>
+    const select = <K extends 'quality' | 'palette' | 'aa'>(label: string, key: K, opts: [Settings[K], string][]) =>
       h(
         'label',
         { class: 'setting' },
@@ -1293,6 +1293,15 @@ export class Screens {
           ['medium', 'Medium'],
           ['high', 'High'],
           ['ultra', 'Ultra'],
+        ]),
+        select('Anti-aliasing', 'aa', [
+          ['auto', 'Auto (preset)'],
+          ['off', 'Off'],
+          ['fxaa', 'FXAA (fast)'],
+          ['msaa2', 'MSAA 2x'],
+          ['msaa4', 'MSAA 4x'],
+          ['msaa8', 'MSAA 8x'],
+          ['smaa', 'SMAA + MSAA 4x (best)'],
         ]),
         this.grainSetting(),
         toggle('Show FPS', 'showFps'),

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Course } from '@ppp/shared';
 import { CourseView } from './CourseView';
-import type { Renderer } from './Renderer';
+import { TIERS, type Renderer } from './Renderer';
 
 /** Slowly orbiting view of a hole behind the menus. */
 export class MenuBackdrop {
@@ -18,13 +18,20 @@ export class MenuBackdrop {
     this.view?.dispose();
     const hole = course.holes[holeIndex % course.holes.length];
     console.info(`[boot] backdrop ${course.id} hole ${holeIndex + 1}`);
-    this.view = new CourseView(hole, course.theme, { decorDensity: this.renderer.quality === 'low' ? 0.5 : 0.8, grass: { low: 0, medium: 8000, high: 20000, ultra: 30000 }[this.renderer.quality] });
+    const t = TIERS[this.renderer.quality];
+    this.view = new CourseView(hole, course.theme, { decorDensity: t.decor * 0.8, grass: t.grass / 2 });
     this.renderer.scene.add(this.view.root);
     this.renderer.applyTheme(course.theme);
     this.renderer.fitShadow(this.view.bounds.min, this.view.bounds.max);
     this.center.copy(this.view.bounds.min).add(this.view.bounds.max).multiplyScalar(0.5);
     const size = this.view.bounds.max.clone().sub(this.view.bounds.min);
     this.radius = Math.max(size.x, size.z) * 0.6 + 6;
+  }
+
+  /** Graphics quality changed: rebuild the scenery round the backdrop hole straight away. */
+  refreshGraphics(): void {
+    const t = TIERS[this.renderer.quality];
+    this.view?.rebuildScenery(t.decor * 0.8, t.grass / 2);
   }
 
   update(dt: number): void {

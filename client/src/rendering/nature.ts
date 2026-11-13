@@ -188,9 +188,13 @@ const matCache = new Map<string, THREE.Material>();
 /**
  * Leaf cut-outs: mipmapping averages the thin leaves away into the transparent background, so
  * distant trees go see-through and fringed. Boost alpha with the mip level (keeps coverage), then
- * sharpen it to a one-pixel ramp (crisp, antialiased edges with alpha-to-coverage).
+ * sharpen it to a one-pixel ramp so the 0.5 alpha test gives clean edges at every distance.
+ *
+ * (v1.8.0 used alpha-to-coverage here; under the HDR post chain its partly covered edge samples
+ * came out as a bright speckled rim round every branch. Edges are smoothed by the anti-aliasing
+ * setting instead: FXAA or SMAA.)
  */
-const ALPHA_FIX = `#include <map_fragment>
+const ALPHA_SHARPEN = `
   {
     vec2 tsz = vec2(textureSize(map, 0));
     vec2 dx = dFdx(vMapUv * tsz), dy = dFdy(vMapUv * tsz);
@@ -198,6 +202,13 @@ const ALPHA_FIX = `#include <map_fragment>
     diffuseColor.a *= 1.0 + lod * 0.28;
     diffuseColor.a = (diffuseColor.a - 0.5) / max(fwidth(diffuseColor.a), 0.0001) + 0.5;
   }`;
+const ALPHA_FIX = `#include <map_fragment>${ALPHA_SHARPEN}`;
+/** Canopies: the leaf texture is only a mask (colour comes from the palette), so take its alpha
+ * alone; the colour under the cut-out can never bleed into the edge. */
+const MASK_ONLY = `
+  #ifdef USE_MAP
+    diffuseColor.a *= texture2D(map, vMapUv).a;
+  #endif${ALPHA_SHARPEN}`;
 
 function canopyMaterial(kit: Kit, tex: THREE.Texture | null, pine: boolean): THREE.Material {
   const key = `canopy:${kit}:${tex?.uuid}:${pine}`;
@@ -256,7 +267,7 @@ function canopyMaterial(kit: Kit, tex: THREE.Texture | null, pine: boolean): THR
         leaf *= mix(0.62, 1.0, vShade.y) * (0.92 + vVar * 0.16);
         diffuseColor.rgb *= leaf;`,
       )
-      .replace('#include <map_fragment>', ALPHA_FIX)
+      .replace('#include <map_fragment>', MASK_ONLY)
       // Leaves are lit from outside the canopy whichever side of the card faces the camera.
       .replace('float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;', 'float faceDirection = 1.0;')
       .replace(
@@ -319,18 +330,6 @@ function plainMaterial(kit: Kit, role: Role, tex: THREE.Texture | null): THREE.M
   return m;
 }
 
-/** MSAA is on in every tier, so alpha-tested leaves can use alpha-to-coverage for soft edges. */
-export function setFoliageCoverage(on: boolean): void {
-  for (const m of matCache.values()) {
-    if (m.alphaTest > 0 && m.alphaToCoverage !== on) {
-      m.alphaToCoverage = on;
-      m.needsUpdate = true;
-    }
-  }
-  coverage = on;
-}
-let coverage = true;
-
 export interface NaturePart {
   geo: THREE.BufferGeometry;
   mat: THREE.Material;
@@ -351,10 +350,6 @@ export function naturePartsFor(name: string, kit: Kit, height: number, scale = 1
     let mat: THREE.Material;
     if (p.role === 'canopy') mat = canopyMaterial(kit, p.tex, p.src.startsWith('Leaves_Pine'));
     else mat = plainMaterial(kit, p.role, p.tex);
-    if (mat.alphaTest > 0 && mat.alphaToCoverage !== coverage) {
-      mat.alphaToCoverage = coverage;
-      mat.needsUpdate = true;
-    }
     return { geo: p.geo, mat, m };
   });
 }
