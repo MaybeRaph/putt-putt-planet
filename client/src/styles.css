@@ -471,6 +471,20 @@ select:focus {
   width: 160px;
   accent-color: var(--accent);
 }
+.setting-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Slider + value: same overall width as the plain 160px sliders, so the column lines up. */
+.setting-range input[type='range'] {
+  width: 120px;
+}
+.setting-value {
+  width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .setting input[type='checkbox'] {
   width: 22px;
   height: 22px;

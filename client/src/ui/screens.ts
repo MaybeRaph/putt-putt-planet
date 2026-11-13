@@ -1294,6 +1294,7 @@ export class Screens {
           ['high', 'High'],
           ['ultra', 'Ultra'],
         ]),
+        this.grainSetting(),
         toggle('Show FPS', 'showFps'),
         toggle('Show ping (online)', 'showPing'),
         h('h3', {}, 'Accessibility'),
@@ -1311,6 +1312,34 @@ export class Screens {
     const el = h('div', { class: asOverlay ? 'modal wide' : 'screen' }, this.header('Settings', back), body);
     if (asOverlay) g.ui.showOverlay(el);
     else g.ui.showScreen(el);
+  }
+
+  /** Film grain: a 0-100 slider with its value (0 shows "Off"). */
+  private grainSetting(): HTMLElement {
+    const g = this.game;
+    const out = h('span', { class: 'muted setting-value' }, g.settings.grain ? String(g.settings.grain) : 'Off');
+    return h(
+      'label',
+      { class: 'setting' },
+      h('span', {}, 'Film grain'),
+      h(
+        'span',
+        { class: 'setting-range' },
+        h('input', {
+          type: 'range',
+          min: 0,
+          max: 100,
+          step: 1,
+          value: g.settings.grain,
+          oninput: (e: Event) => {
+            g.settings.grain = Number((e.target as HTMLInputElement).value);
+            out.textContent = g.settings.grain ? String(g.settings.grain) : 'Off';
+            g.applySettings();
+          },
+        }),
+        out,
+      ),
+    );
   }
 
   /** Windowed / fullscreen (borderless) picker: desktop app via the shell, browsers via the Fullscreen API. */

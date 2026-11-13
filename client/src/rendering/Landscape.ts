@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import type { Theme } from '@ppp/shared';
 import { fbm, noise2, ridged, smoothstep } from './noise';
+import { natureActive, rockMaterial, rockModels } from './nature';
 
 type Kit = Theme['decorKit'];
 
 /** Per-world terrain palette: low grass, high grass, dirt, rock, peak. */
 const PALETTE: Record<Kit, { g1: string; g2: string; dirt: string; rock: string; rock2: string; peak: string; grassBase: string; grassTip: string }> = {
-  meadow: { g1: '#4f9e3f', g2: '#76c257', dirt: '#8a6a48', rock: '#7d828c', rock2: '#9aa0a8', peak: '#eef3f8', grassBase: '#3f8a35', grassTip: '#a6dd6a' },
+  meadow: { g1: '#4f9e3f', g2: '#76c257', dirt: '#8a6a48', rock: '#8a7f75', rock2: '#a89c8e', peak: '#eef3f8', grassBase: '#3f8a35', grassTip: '#a6dd6a' },
   candy: { g1: '#ff9ccb', g2: '#ffc2e0', dirt: '#d98bb5', rock: '#b07ccf', rock2: '#cfa3e6', peak: '#fff4fb', grassBase: '#ff7fb8', grassTip: '#ffe0f0' },
   frozen: { g1: '#dbe8f2', g2: '#eef5fb', dirt: '#b9c9d6', rock: '#6f8296', rock2: '#8fa2b5', peak: '#ffffff', grassBase: '#9fb7c4', grassTip: '#f2f8fc' },
   clockwork: { g1: '#7a6553', g2: '#8c7561', dirt: '#5e4b3d', rock: '#55473d', rock2: '#6e5c4f', peak: '#a07b5c', grassBase: '#6b5a3a', grassTip: '#b49a62' },
@@ -85,6 +86,9 @@ export class Landscape {
 
   /** Per-hole character: how strong each landform is and which way ridges and dunes run. */
   private readonly style: { swell: number; feature: number; ridge: number; angle: number; tint: number; light: number };
+
+  /** Stylised look (smooth painted terrain, model cliffs, hazier distance) on the model tiers. */
+  private readonly stylized = natureActive();
 
   constructor(private readonly o: LandscapeOpts) {
     this.group.name = 'landscape';
@@ -210,7 +214,7 @@ export class Landscape {
       col.set([tmp.r, tmp.g, tmp.b], i * 3);
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: !this.stylized });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'terrain';
@@ -229,9 +233,11 @@ export class Landscape {
     const edge = Math.max(half.x, half.y) + 118;
     const fog = new THREE.Color(haze.fog);
     const sky = new THREE.Color(haze.sky);
+    // The stylised look pushes the distance further into the sky colour (soft blue aerial haze).
+    const hz = this.stylized && kit !== 'space' ? 0.12 : 0;
     const layers = [
-      { r: edge, amp: kit === 'space' ? 26 : 46, base: 10, mix: 0.5, seed: seed + 201, freq: 3.1 },
-      { r: edge + 80, amp: kit === 'space' ? 40 : 78, base: 18, mix: 0.76, seed: seed + 301, freq: 2.2 },
+      { r: edge, amp: kit === 'space' ? 26 : 46, base: 10, mix: 0.5 + hz, seed: seed + 201, freq: 3.1 },
+      { r: edge + 80, amp: kit === 'space' ? 40 : 78, base: 18, mix: 0.76 + hz, seed: seed + 301, freq: 2.2 },
     ];
     const n = 120;
     for (const [li, L] of layers.entries()) {
@@ -239,7 +245,7 @@ export class Landscape {
       const col: number[] = [];
       const idx: number[] = [];
       const low = new THREE.Color(P.rock).lerp(fog, L.mix);
-      const high = new THREE.Color(kit === 'space' ? P.peak : P.rock2).lerp(fog, L.mix).lerp(sky, 0.25 + 0.15 * li);
+      const high = new THREE.Color(kit === 'space' ? P.peak : P.rock2).lerp(fog, L.mix).lerp(sky, 0.25 + 0.15 * li + hz);
       for (let i = 0; i <= n; i++) {
         const a = (i / n) * Math.PI * 2;
         // Sample the noise on a circle so the ring closes without a seam.
@@ -275,6 +281,7 @@ export class Landscape {
 
   /** Big faceted rock spires and boulders (like cliffs rising out of the hills). */
   private buildRocks(): void {
+    if (this.stylized && this.buildModelRocks()) return;
     const { center, half, kit, seed } = this.o;
     const P = PALETTE[kit];
     const variants: THREE.BufferGeometry[] = [];
@@ -320,6 +327,54 @@ export class Landscape {
       this.group.add(im);
       this.owned.push({ dispose: () => im.dispose() });
     }
+  }
+
+  /**
+   * Stylised: painted cliff rocks (the nature kit's boulders, scaled up into chunky buttes and
+   * spires) standing round the course at a distance.
+   */
+  private buildModelRocks(): boolean {
+    const rocks = rockModels();
+    const mat = rockMaterial(this.o.kit);
+    if (!rocks.length || !mat) return false;
+    const { center, half, kit, seed } = this.o;
+    let r = seed;
+    const rand = () => ((r = (r * 16807) % 2147483647) / 2147483647);
+    const R = Math.max(half.x, half.y);
+    const per = 7;
+    const m = new THREE.Matrix4();
+    for (const [v, rock] of rocks.entries()) {
+      const im = new THREE.InstancedMesh(rock.geo, mat, per);
+      const box = rock.geo.boundingBox!.clone().applyMatrix4(rock.local);
+      for (let i = 0; i < per; i++) {
+        const a = rand() * Math.PI * 2;
+        const dist = R + 14 + rand() * 44;
+        const x = center.x + Math.cos(a) * dist,
+          z = center.y + Math.sin(a) * dist;
+        // Buttes (wide, flat-topped) and spires (tall, narrow), sized in metres.
+        const spire = (i + v) % 3 === 0;
+        const tall = (kit === 'space' ? 3 : 5) + rand() * (spire ? 12 : 6);
+        const wide = spire ? 3 + rand() * 2.5 : 6 + rand() * 6;
+        const sx = wide / rock.size.x,
+          sy = tall / rock.size.y,
+          sz = (wide * (0.8 + rand() * 0.4)) / rock.size.z;
+        const base = this.heightAt(x, z) - 0.6 - box.min.y * sy;
+        m.compose(
+          new THREE.Vector3(x, base, z),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rand() * 6.28, 0)),
+          new THREE.Vector3(sx, sy, sz),
+        );
+        im.setMatrixAt(i, m.multiply(rock.local));
+      }
+      // Well outside the shadow map round the course: no need to render them into it.
+      im.castShadow = false;
+      im.receiveShadow = true;
+      im.computeBoundingSphere();
+      im.name = `cliffs:${v}`;
+      this.group.add(im);
+      this.owned.push({ dispose: () => im.dispose() });
+    }
+    return true;
   }
 
   /** Thousands of instanced grass blades with GPU wind sway. */

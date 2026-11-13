@@ -9,6 +9,8 @@ export class MenuBackdrop {
   private t = 0;
   private center = new THREE.Vector3();
   private radius = 10;
+  /** Dev: a fixed orbit angle (radians) instead of the slow spin. */
+  freeze: number | null = null;
 
   constructor(private readonly renderer: Renderer) {}
 
@@ -28,11 +30,11 @@ export class MenuBackdrop {
   update(dt: number): void {
     if (!this.view) return;
     this.t += dt;
-    const a = this.t * 0.06;
+    const a = this.freeze ?? this.t * 0.06;
     const cam = this.renderer.camera;
     cam.position.set(
       this.center.x + Math.cos(a) * this.radius,
-      this.center.y + this.radius * 0.45,
+      this.center.y + this.radius * 0.62,
       this.center.z + Math.sin(a) * this.radius,
     );
     cam.lookAt(this.center);

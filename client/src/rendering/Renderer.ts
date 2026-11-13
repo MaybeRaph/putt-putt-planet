@@ -7,6 +7,8 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import type { Theme } from '@ppp/shared';
 import { Ambience } from './Ambience';
+import { setNatureEnabled, tickNature } from './nature';
+import { SKY, SKY_FRAG, SKY_VERT } from './sky';
 
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
 
@@ -27,13 +29,23 @@ interface Tier {
   tilt: boolean;
   /** Atmosphere motes drifting around the camera. */
   motes: number;
+  /** Stylised scenery models (false = the classic procedural low-poly props). */
+  models: boolean;
+  /** Noise octaves in the sky's clouds. */
+  skyDetail: number;
 }
 
 /**
  * Quality tiers. Every tier renders through one MSAA scene target (the canvas itself has no
- * MSAA backbuffer, which would be wasted memory under post-processing). High keeps the look
- * at a much smaller memory footprint than before (1.5x pixel ratio, half-res AO, 2048 shadows);
- * Ultra spends it all.
+ * MSAA backbuffer, which would be wasted memory under post-processing).
+ *
+ * Tuned for v1.8 on an Apple M2 at 1440x810 (Retina), meadow hole 6 (frame times, GPU-synced):
+ *  - Low     ~2 ms   classic procedural props, no shadows or post effects (weak/mobile GPUs).
+ *  - Medium  ~13 ms  stylised models, painted sky, shadows; no AO or bloom.
+ *  - High    ~16 ms  + 4x MSAA, softer shadows, bloom, motes, denser grass. Screen-space AO cost
+ *                    ~12 ms here and was nearly invisible under the stylised shading (the
+ *                    canopies carry baked depth), so High leaves it out.
+ *  - Ultra   2x pixel ratio, half-res AO, 4096 shadows, tilt-shift: for big desktop GPUs.
  */
 export const TIERS: Record<Quality, Tier> = {
   low: {
@@ -46,6 +58,8 @@ export const TIERS: Record<Quality, Tier> = {
     grade: false,
     tilt: false,
     motes: 0,
+    models: false,
+    skyDetail: 3,
   },
   medium: {
     dpr: 1.5,
@@ -57,28 +71,34 @@ export const TIERS: Record<Quality, Tier> = {
     grade: true,
     tilt: false,
     motes: 0,
+    models: true,
+    skyDetail: 4,
   },
   high: {
     dpr: 1.5,
     shadow: 2048,
     shadowRadius: 2,
     samples: 4,
-    ao: 0.5,
+    ao: 0,
     bloom: true,
     grade: true,
     tilt: false,
     motes: 260,
+    models: true,
+    skyDetail: 5,
   },
   ultra: {
     dpr: 2,
     shadow: 4096,
     shadowRadius: 3,
     samples: 4,
-    ao: 1,
+    ao: 0.5,
     bloom: true,
     grade: true,
     tilt: true,
     motes: 700,
+    models: true,
+    skyDetail: 6,
   },
 };
 
@@ -131,34 +151,31 @@ const GradeShader = {
     }`,
 };
 
-/** Gradient sky with sun glow and soft procedural clouds. */
-const SKY_VERT = `varying vec3 vP; void main(){ vP = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position,1.0); gl_Position = p.xyww; }`;
-const SKY_FRAG = `
-uniform vec3 uTop; uniform vec3 uBottom; uniform vec3 uSunDir; uniform vec3 uSunColor; uniform float uClouds; uniform float uTime; uniform vec3 uCloudColor;
-varying vec3 vP;
-float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-  return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y); }
-float fbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++){ s += a * vn(p); p *= 2.03; a *= 0.5; } return s; }
-void main(){
-  vec3 d = normalize(vP);
-  float h = d.y;
-  vec3 col = mix(uBottom, uTop, smoothstep(-0.02, 0.55, h));
-  col = mix(col, uBottom * 1.06, smoothstep(0.12, 0.0, abs(h)) * 0.6); // bright horizon band
-  float s = max(dot(d, uSunDir), 0.0);
-  col += uSunColor * (pow(s, 600.0) * 4.0 + pow(s, 24.0) * 0.25 + pow(s, 4.0) * 0.08);
-  if (h > 0.0 && uClouds > 0.0) {
-    vec2 uv = d.xz / (h + 0.18) * 1.1 + vec2(uTime * 0.004, uTime * 0.0015);
-    float c = fbm(uv * 1.4);
-    float cov = smoothstep(0.52 - uClouds * 0.12, 0.85, c) * smoothstep(0.0, 0.18, h);
-    float shade = 0.82 + 0.18 * smoothstep(0.4, 0.9, fbm(uv * 1.4 + 0.15));
-    vec3 cc = uCloudColor * shade + uSunColor * pow(s, 6.0) * 0.25;
-    col = mix(col, cc, cov * 0.9);
-  }
-  gl_FragColor = vec4(col, 1.0);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-}`;
+/**
+ * Film grain, applied last on the display image (after tone mapping) so it reads like real
+ * film: fresh noise 24 times a second, about one screen pixel big, strongest in the midtones.
+ */
+const GrainShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uAmount: { value: 0 },
+    uTime: { value: 0 },
+    uRes: { value: new THREE.Vector2(1, 1) },
+    uSize: { value: 1 },
+  },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float uAmount; uniform float uTime; uniform vec2 uRes; uniform float uSize; varying vec2 vUv;
+    float hash(vec3 p){ p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      vec2 px = floor(vUv * uRes / uSize);
+      float t = floor(uTime * 24.0);
+      float n = hash(vec3(px, t)) + hash(vec3(px + 17.0, t + 3.0)) - 1.0;
+      float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+      c.rgb += n * uAmount * (0.4 + 0.6 * (1.0 - abs(l - 0.5) * 1.5));
+      gl_FragColor = c;
+    }`,
+};
 
 /** Owns the WebGL renderer, scene, camera, lights, sky, environment lighting and post-processing. */
 export class Renderer {
@@ -169,18 +186,22 @@ export class Renderer {
   readonly hemi: THREE.HemisphereLight;
   private readonly sky: THREE.Mesh;
   private readonly skyMat: THREE.ShaderMaterial;
-  private readonly stars: THREE.Points;
   private readonly pmrem: THREE.PMREMGenerator;
   private envTex: THREE.Texture | null = null;
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
   private gtao: GTAOPass | null = null;
   private tilt: ShaderPass | null = null;
+  private grain: ShaderPass | null = null;
+  /** Film grain 0..100 (0 = off). */
+  private grainLevel = 0;
   private readonly ambience = new Ambience();
   private time = 0;
   quality: Quality = 'high';
   contextLost = false;
   private lastTheme: Theme | null = null;
+  /** Direction towards the sun (per world; drives the sky and the shadows). */
+  private readonly sunDir = new THREE.Vector3(0.55, 0.75, 0.38).normalize();
 
   constructor(container: HTMLElement) {
     this.gl = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -229,12 +250,19 @@ export class Renderer {
       fog: false,
       uniforms: {
         uTop: { value: new THREE.Color('#5fb4ff') },
+        uMid: { value: new THREE.Color('#9fd2ff') },
         uBottom: { value: new THREE.Color('#e8f6ff') },
-        uSunDir: { value: new THREE.Vector3(0.5, 0.6, 0.35).normalize() },
+        uSunDir: { value: this.sunDir.clone() },
         uSunColor: { value: new THREE.Color('#fff4dc') },
-        uCloudColor: { value: new THREE.Color('#ffffff') },
-        uClouds: { value: 1 },
+        uHalo: { value: 0.35 },
+        uCloudLit: { value: new THREE.Color('#ffffff') },
+        uCloudShade: { value: new THREE.Color('#a9b7e0') },
+        uClouds: { value: 0.55 },
+        uLayered: { value: 0 },
+        uCirrus: { value: 0.5 },
+        uExtra: { value: 0 },
         uTime: { value: 0 },
+        uDetail: { value: 5 },
       },
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
@@ -244,31 +272,6 @@ export class Renderer {
     this.sky.frustumCulled = false;
     this.scene.add(this.sky);
 
-    // Starfield (space world only).
-    const n = 2200;
-    const pos = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const u = Math.random() * 2 - 1,
-        a = Math.random() * Math.PI * 2;
-      const r = Math.sqrt(1 - u * u);
-      pos.set([Math.cos(a) * r * 380, Math.abs(u) * 380 - 30, Math.sin(a) * r * 380], i * 3);
-    }
-    const sg = new THREE.BufferGeometry();
-    sg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    this.stars = new THREE.Points(
-      sg,
-      new THREE.PointsMaterial({
-        color: 0xffffff,
-        size: 1.6,
-        sizeAttenuation: false,
-        fog: false,
-        transparent: true,
-        opacity: 0.9,
-      }),
-    );
-    this.stars.visible = false;
-    this.stars.renderOrder = -1;
-    this.scene.add(this.stars);
     this.scene.add(this.ambience.points);
 
     this.resize();
@@ -279,6 +282,8 @@ export class Renderer {
     if (!(q in TIERS)) q = 'high';
     this.quality = q;
     const T = TIERS[q];
+    setNatureEnabled(T.models);
+    this.skyMat.uniforms.uDetail.value = T.skyDetail;
     this.gl.setPixelRatio(Math.min(window.devicePixelRatio, T.dpr));
     this.gl.shadowMap.enabled = T.shadow > 0;
     if (T.shadow) {
@@ -293,6 +298,7 @@ export class Renderer {
     this.bloom = null;
     this.gtao = null;
     this.tilt = null;
+    this.grain = null;
     const size = this.gl.getDrawingBufferSize(new THREE.Vector2());
     // Only the buffer the scene is drawn into needs MSAA (RenderPass draws into readBuffer =
     // renderTarget2); the ping-pong partner stays single-sampled.
@@ -329,6 +335,9 @@ export class Renderer {
     }
     if (T.grade) this.composer.addPass(new ShaderPass(GradeShader));
     this.composer.addPass(new OutputPass());
+    this.grain = new ShaderPass(GrainShader);
+    this.composer.addPass(this.grain);
+    this.setGrain(this.grainLevel);
     this.ambience.setCount(T.motes);
     this.resize();
     this.scene.traverse((o) => {
@@ -337,17 +346,33 @@ export class Renderer {
     });
   }
 
+  /** Film grain strength, 0 (off) to 100. */
+  setGrain(level: number): void {
+    this.grainLevel = Math.max(0, Math.min(100, level || 0));
+    if (!this.grain) return;
+    this.grain.enabled = this.grainLevel > 0;
+    this.grain.uniforms.uAmount.value = Math.pow(this.grainLevel / 100, 1.3) * 0.17;
+  }
+
   applyTheme(theme: Theme): void {
     this.lastTheme = theme;
     const u = this.skyMat.uniforms;
+    const st = SKY[theme.decorKit];
+    const space = theme.decorKit === 'space';
     u.uTop.value.set(theme.skyTop);
     u.uBottom.value.set(theme.skyBottom);
+    if (st.mid) u.uMid.value.set(st.mid);
+    else u.uMid.value.set(theme.skyTop).lerp(new THREE.Color(theme.skyBottom), 0.5);
     u.uSunColor.value.set(theme.sun);
-    const space = theme.decorKit === 'space';
-    u.uClouds.value = space ? 0 : theme.decorKit === 'clockwork' ? 0.7 : 1;
-    u.uCloudColor.value.set(
-      theme.decorKit === 'clockwork' ? '#f2d8c2' : theme.decorKit === 'candy' ? '#fff0f8' : '#ffffff',
-    );
+    u.uHalo.value = st.halo;
+    u.uCloudLit.value.set(st.cloudLit);
+    u.uCloudShade.value.set(st.cloudShade);
+    u.uClouds.value = st.clouds;
+    u.uLayered.value = st.layered;
+    u.uCirrus.value = st.cirrus;
+    u.uExtra.value = st.extra;
+    this.sunDir.set(...st.sun).normalize();
+    u.uSunDir.value.copy(this.sunDir);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.set(theme.fog);
     // Heavy fog (the Fog Bank omen): exact distances from the camera, and the sky itself turns
@@ -357,16 +382,17 @@ export class Renderer {
     fog.far = dense ? theme.fogFar : theme.fogFar * 1.9;
     if (dense) {
       u.uTop.value.set(theme.fog);
+      u.uMid.value.set(theme.fog);
       u.uBottom.value.set(theme.fog);
       u.uSunColor.value.set(theme.fog).multiplyScalar(0.15);
       u.uClouds.value = 0;
-      this.stars.visible = false;
+      u.uCirrus.value = 0;
+      u.uExtra.value = 0;
     }
     this.sun.color.set(theme.sun);
     this.sun.intensity = theme.sunIntensity * 1.35;
     this.hemi.color.set(theme.ambient);
     this.hemi.groundColor.set(theme.ground);
-    this.stars.visible = space && !dense;
     this.scene.environmentIntensity = space ? 0.45 : 0.75;
     this.ambience.applyTheme(theme);
     this.buildEnvironment();
@@ -378,6 +404,8 @@ export class Renderer {
     const skyMat = this.skyMat.clone();
     skyMat.uniforms = THREE.UniformsUtils.clone(this.skyMat.uniforms);
     skyMat.uniforms.uClouds.value = 0;
+    skyMat.uniforms.uCirrus.value = 0;
+    skyMat.uniforms.uDetail.value = 3;
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), skyMat);
     envScene.add(mesh);
     const rt = this.pmrem.fromScene(envScene, 0.02);
@@ -392,7 +420,7 @@ export class Renderer {
   fitShadow(min: THREE.Vector3, max: THREE.Vector3): void {
     const c = min.clone().add(max).multiplyScalar(0.5);
     const r = min.distanceTo(max) / 2 + 3;
-    const dir = new THREE.Vector3(0.55, 0.75, 0.38).normalize();
+    const dir = this.sunDir;
     this.sun.position.copy(c).addScaledVector(dir, r + 15);
     this.sun.target.position.copy(c);
     const cam = this.sun.shadow.camera;
@@ -417,14 +445,17 @@ export class Renderer {
     this.bloom?.setSize((w * pr) / 2, (h * pr) / 2);
     this.tilt?.uniforms.uRes.value.set(w * pr, h * pr);
     if (this.tilt) this.tilt.uniforms.uRadius.value = 3.2 * pr;
+    this.grain?.uniforms.uRes.value.set(w * pr, h * pr);
+    if (this.grain) this.grain.uniforms.uSize.value = Math.max(1, pr * 0.9);
   }
 
   render(dt = 1 / 60): void {
     if (this.contextLost) return;
     this.time += dt;
     this.skyMat.uniforms.uTime.value = this.time;
+    tickNature(this.time);
+    if (this.grain) this.grain.uniforms.uTime.value = this.time;
     this.sky.position.copy(this.camera.position);
-    this.stars.position.copy(this.camera.position);
     this.ambience.update(
       this.time,
       this.camera,

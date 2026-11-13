@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { hashString, rng, range, pick, type Decor, type Theme } from '@ppp/shared';
 import { flat } from './materials';
+import { natureActive, naturePartsFor } from './nature';
 
 /**
  * Procedural low-poly decor. Each kind is a list of parts (shared geometry + material + local
@@ -66,7 +67,33 @@ const G = {
 
 type Kit = Theme['decorKit'];
 
-function partsFor(kind: string, color: string | undefined, r: () => number): Part[] {
+/** A model pick: one of `names`, `height` metres tall (or scaled by `scale` if height is 0). */
+const MODEL: Record<string, { names: string[]; height: number; scale?: number }> = {
+  tree: { names: ['CommonTree_1', 'CommonTree_2', 'CommonTree_3', 'CommonTree_4', 'CommonTree_5'], height: 4.8 },
+  pine: { names: ['Pine_1', 'Pine_2', 'Pine_3', 'Pine_4', 'Pine_5'], height: 5.6 },
+  snowpine: { names: ['Pine_1', 'Pine_2', 'Pine_3', 'Pine_4', 'Pine_5'], height: 4.8 },
+  deadtree: { names: ['DeadTree_1', 'DeadTree_3'], height: 5.2 },
+  bush: { names: ['Bush_Common', 'Bush_Common', 'Bush_Common_Flowers'], height: 1.15 },
+  fern: { names: ['Fern_1', 'Plant_1_Big', 'Plant_7_Big'], height: 0, scale: 0.55 },
+  flower: { names: ['Flower_3_Group', 'Flower_4_Group', 'Clover_1', 'Clover_1'], height: 0, scale: 0.28 },
+  mushroom: { names: ['Mushroom_Common'], height: 0, scale: 0.75 },
+  rock: { names: ['Rock_Medium_1', 'Rock_Medium_2', 'Rock_Medium_3'], height: 0, scale: 0.42 },
+  spacerock: { names: ['Rock_Medium_1', 'Rock_Medium_2', 'Rock_Medium_3'], height: 0, scale: 0.5 },
+  pebble: { names: ['Pebble_Round_1', 'Pebble_Round_3'], height: 0, scale: 1.1 },
+};
+
+/** Stylised model parts for a decor kind, or null to use the procedural shape. */
+function modelParts(kind: string, kit: Kit, r: () => number): Part[] | null {
+  const def = MODEL[kind];
+  if (!def) return null;
+  return naturePartsFor(pick(r, def.names), kit, def.height, def.scale);
+}
+
+function partsFor(kind: string, color: string | undefined, r: () => number, kit: Kit = 'meadow'): Part[] {
+  if (natureActive()) {
+    const parts = modelParts(kind, kit, r);
+    if (parts) return parts;
+  }
   const c = (hex: string) => flat(color ?? hex);
   switch (kind) {
     case 'tree': {
@@ -255,6 +282,37 @@ const KIT_SCATTER: Record<Kit, { near: string[]; far: string[]; backdrop: string
   },
 };
 
+const TALL = new Set(['tree', 'pine', 'snowpine', 'deadtree', 'lollipop', 'chimney', 'pipe', 'antenna']);
+
+/** Scatter lists when the stylised models are in use (the procedural props stay for flavour). */
+const KIT_SCATTER_MODELS: Record<Kit, { near: string[]; far: string[]; fill: string[] }> = {
+  meadow: {
+    near: ['tree', 'tree', 'pine', 'pine', 'bush', 'bush', 'fern', 'flower', 'flower', 'rock', 'mushroom'],
+    far: ['tree', 'pine', 'pine', 'tree', 'pine'],
+    fill: ['flower', 'flower', 'fern', 'bush', 'mushroom', 'pebble'],
+  },
+  candy: {
+    near: ['tree', 'lollipop', 'gumdrop', 'bush', 'candycane', 'donut', 'gumdrop', 'tree'],
+    far: ['tree', 'pine', 'lollipop', 'tree'],
+    fill: ['flower', 'gumdrop', 'bush', 'flower'],
+  },
+  frozen: {
+    near: ['snowpine', 'snowpine', 'snowpine', 'rock', 'crystal', 'snowman', 'bush', 'iceblock'],
+    far: ['snowpine', 'snowpine', 'snowpine', 'tree'],
+    fill: ['bush', 'rock', 'crystal', 'pebble'],
+  },
+  clockwork: {
+    near: ['gear', 'pipe', 'crate', 'tree', 'deadtree', 'rock', 'chimney', 'bush'],
+    far: ['tree', 'deadtree', 'chimney', 'pine', 'tree'],
+    fill: ['bush', 'fern', 'crate', 'pebble'],
+  },
+  space: {
+    near: ['crystal', 'spacerock', 'alienplant', 'tree', 'antenna', 'spacerock', 'alienplant'],
+    far: ['crystal', 'spacerock', 'tree'],
+    fill: ['alienplant', 'crystal', 'pebble'],
+  },
+};
+
 const BACKDROP_COLOR: Record<Kit, string> = {
   meadow: '#86c773',
   candy: '#ffb3d1',
@@ -278,7 +336,8 @@ export function buildDecor(
   heightAt: (x: number, z: number) => number = () => groundY,
 ): THREE.Group {
   const r = rng(hashString(holeId + kit));
-  const placements: { kind: string; pos: THREE.Vector3; scale: number; rotY: number; color?: string }[] = [];
+  /** `far`: beyond the shadow map round the course, so it needn't render into it. */
+  const placements: { kind: string; pos: THREE.Vector3; scale: number; rotY: number; color?: string; far?: boolean }[] = [];
   for (const d of authored)
     placements.push({
       kind: d.kind,
@@ -293,26 +352,31 @@ export function buildDecor(
     cz = (bounds.min.z + bounds.max.z) / 2;
   const rx = (bounds.max.x - bounds.min.x) / 2,
     rz = (bounds.max.z - bounds.min.z) / 2;
-  const kitDef = KIT_SCATTER[kit];
+  const models = natureActive();
+  const kitDef = models ? { ...KIT_SCATTER[kit], ...KIT_SCATTER_MODELS[kit] } : KIT_SCATTER[kit];
   const count = Math.round((70 + (rx + rz) * 3.2) * density);
   for (let i = 0, tries = 0; i < count && tries < count * 8; tries++) {
     const ring = r() < 0.45 ? range(r, 0.9, 5) : range(r, 5, 30);
     const a = r() * Math.PI * 2;
     const x = cx + Math.cos(a) * (rx + ring);
     const z = cz + Math.sin(a) * (rz + ring);
-    const kind = pick(r, ring < 5 ? kitDef.near : kitDef.far);
-    const isSmall = kind === 'flower' || kind === 'mushroom';
+    let kind = pick(r, ring < 5 ? kitDef.near : kitDef.far);
+    // Full-size model trees would wall in the camera right beside the rails: close in, keep to
+    // low plants and rocks, and let the trees start a few metres out.
+    if (models && ring < 3.2 && TALL.has(kind)) kind = pick(r, KIT_SCATTER_MODELS[kit].fill);
+    const isSmall = kind === 'flower' || kind === 'mushroom' || kind === 'fern' || kind === 'pebble';
     if (blocked(x, z, isSmall ? 0.5 : 1.6)) continue;
     placements.push({
       kind,
       pos: new THREE.Vector3(x, heightAt(x, z) - 0.05, z),
       scale: range(r, 0.8, 1.4) * (ring > 6 ? 1.25 + ring / 40 : 1),
       rotY: r() * 6.28,
+      far: ring > 7,
     });
     i++;
   }
   // Inner fill: small items close to the course for a lush look.
-  const fillers = kit === 'meadow' ? ['flower', 'flower', 'bush', 'mushroom'] : kitDef.near;
+  const fillers = models ? KIT_SCATTER_MODELS[kit].fill : kit === 'meadow' ? ['flower', 'flower', 'bush', 'mushroom'] : kitDef.near;
   for (let i = 0, tries = 0; i < 30 * density && tries < 400; tries++) {
     const x = range(r, bounds.min.x - 2, bounds.max.x + 2);
     const z = range(r, bounds.min.z - 2, bounds.max.z + 2);
@@ -347,7 +411,7 @@ export function buildDecor(
   // Batch into instanced meshes keyed by geometry+material.
   const batches = new Map<
     string,
-    { geo: THREE.BufferGeometry; mat: THREE.Material; mats: THREE.Matrix4[] }
+    { geo: THREE.BufferGeometry; mat: THREE.Material; mats: THREE.Matrix4[]; far: boolean }
   >();
   const base = new THREE.Matrix4();
   for (const p of placements) {
@@ -356,10 +420,11 @@ export function buildDecor(
       new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotY),
       new THREE.Vector3(p.scale, p.scale, p.scale),
     );
-    for (const part of partsFor(p.kind, p.color, r)) {
-      const key = part.geo.uuid + part.mat.uuid;
+    for (const part of partsFor(p.kind, p.color, r, kit)) {
+      const far = !!p.far || p.kind === 'planet';
+      const key = part.geo.uuid + part.mat.uuid + (far ? 'f' : 'n');
       let b = batches.get(key);
-      if (!b) batches.set(key, (b = { geo: part.geo, mat: part.mat, mats: [] }));
+      if (!b) batches.set(key, (b = { geo: part.geo, mat: part.mat, mats: [], far }));
       b.mats.push(base.clone().multiply(part.m));
     }
   }
@@ -368,7 +433,8 @@ export function buildDecor(
   for (const b of batches.values()) {
     const im = new THREE.InstancedMesh(b.geo, b.mat, b.mats.length);
     b.mats.forEach((m, i) => im.setMatrixAt(i, m));
-    im.castShadow = true;
+    // The sun's shadow map only covers the course and a few metres round it.
+    im.castShadow = !b.far;
     im.receiveShadow = true;
     im.computeBoundingSphere();
     group.add(im);

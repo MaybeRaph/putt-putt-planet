@@ -33,6 +33,7 @@ import { LocalSession } from '../physics/LocalSession';
 import type { Session } from './Session';
 import { audio } from '../audio/Audio';
 import { Screens } from '../ui/screens';
+import { loadNature } from '../rendering/nature';
 
 export type StateName = 'boot' | 'menu' | 'lobby' | 'loading' | 'playing' | 'results';
 
@@ -70,6 +71,7 @@ export class Game {
     this.settings = loadSettings();
     this.renderer = new Renderer(container);
     this.renderer.setQuality(this.settings.quality);
+    this.renderer.setGrain(this.settings.grain);
     this.ui = new UIRoot(container);
     this.screens = new Screens(this);
     this.net = new NetClient(() => this.profile.profile);
@@ -108,7 +110,7 @@ export class Game {
     this.ui.setLoading('Warming up the greens…');
     document.getElementById('boot')?.remove();
     console.info(`[boot] quality ${this.settings.quality}`);
-    await initPhysics();
+    await Promise.all([initPhysics(), loadNature()]);
     console.info('[boot] physics ready');
     this.ui.setLoading(null);
     requestAnimationFrame(this.frame);
@@ -148,8 +150,13 @@ export class Game {
   private showBackdrop(): void {
     if (!this.backdrop) {
       this.backdrop = new MenuBackdrop(this.renderer);
-      const c = COURSES[Math.floor(Math.random() * COURSES.length)];
-      this.backdrop.show(c, Math.floor(Math.random() * c.holes.length));
+      // Dev: ?backdrop=meadow:3 picks the hole behind the menus, &orbit=1.2 freezes the camera angle.
+      const q = new URLSearchParams(location.search);
+      const [cid, hn] = (q.get('backdrop') ?? '').split(':');
+      const pinned = COURSES.find((x) => x.id === cid);
+      const c = pinned ?? COURSES[Math.floor(Math.random() * COURSES.length)];
+      if (q.has('orbit')) this.backdrop.freeze = Number(q.get('orbit'));
+      this.backdrop.show(c, pinned ? Math.max(0, Number(hn || 1) - 1) : Math.floor(Math.random() * c.holes.length));
     }
   }
 
@@ -529,7 +536,10 @@ export class Game {
 
   applySettings(): void {
     saveSettings(this.settings);
-    this.renderer.setQuality(this.settings.quality);
+    // Rebuilding the post stack is heavy: only when the tier actually changes (not on every
+    // slider tick elsewhere in the settings).
+    if (this.settings.quality !== this.renderer.quality) this.renderer.setQuality(this.settings.quality);
+    this.renderer.setGrain(this.settings.grain);
     audio.setVolumes(this.settings.master, this.settings.music, this.settings.sfx);
     if (this.scene) {
       this.scene.hud.palette = this.settings.palette;

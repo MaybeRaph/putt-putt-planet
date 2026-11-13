@@ -37,6 +37,8 @@ export interface Settings {
   music: number;
   sfx: number;
   quality: Quality;
+  /** Film grain filter strength, 0 (off) to 100. */
+  grain: number;
   reducedMotion: boolean;
   palette: Palette;
   camSensitivity: number;
@@ -70,6 +72,7 @@ export const DEFAULT_SETTINGS: Settings = {
   music: 0.5,
   sfx: 0.8,
   quality: isMobile ? 'medium' : 'high',
+  grain: 0,
   reducedMotion: typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches,
   palette: 'default',
   camSensitivity: 1,
