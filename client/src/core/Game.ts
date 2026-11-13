@@ -18,7 +18,7 @@ import {
   type S2CMsg,
   type ScoreState,
 } from '@ppp/shared';
-import { NetClient } from '../net/NetClient';
+import { LINK_DEAD_MS, LINK_QUIET_MS, NetClient } from '../net/NetClient';
 import { LocalHost } from '../net/LocalHost';
 import { answerInvite } from '../net/p2p';
 import { RemoteSession } from '../net/RemoteSession';
@@ -88,6 +88,7 @@ export class Game {
         this.goMenu();
       } else if (this.state === 'lobby') this.ui.toast('Connection lost — reconnecting…', 'bad');
     });
+    window.setInterval(() => this.watchLink(), 1000);
     // Keep the server copy of the profile in sync (debounced) while connected.
     this.profile.bus.on('changed', () => {
       if (this.net.status !== 'online') return;
@@ -328,6 +329,43 @@ export class Game {
     );
     this.net.hello();
     if (code) this.net.send({ t: 'joinRoom', code });
+  }
+
+  /** True while the host has gone quiet (see watchLink). */
+  private linkQuiet = false;
+
+  /**
+   * A link can stay "open" while nothing gets through (its route died: a router or VPN dropping
+   * the port mapping). Before, a guest then sat in a lobby that never updated: Ready did nothing,
+   * new players never appeared and the match never loaded. Now: after LINK_QUIET_MS of silence say
+   * so (the link is re-establishing itself meanwhile, see relinkOnDrop); if it comes back, say
+   * that; if a direct link stays dead for LINK_DEAD_MS, leave with an explanation instead of
+   * hanging forever.
+   */
+  private watchLink(): void {
+    if (!this.room || this.net.kind === 'loopback') {
+      this.linkQuiet = false;
+      return;
+    }
+    const silent = this.net.silentMs;
+    if (!this.linkQuiet && silent > LINK_QUIET_MS) {
+      this.linkQuiet = true;
+      console.warn(`[net] nothing from the host for ${Math.round(silent / 1000)} s (link ${this.net.status})`);
+      this.ui.toast("The host isn't getting through — trying to reconnect…", 'bad', 6000);
+    } else if (this.linkQuiet && silent < 2500) {
+      this.linkQuiet = false;
+      console.info('[net] the host is getting through again');
+      this.ui.toast('Back in touch with the host', 'good');
+    } else if (this.linkQuiet && this.net.kind === 'peer' && silent > LINK_DEAD_MS) {
+      this.linkQuiet = false;
+      console.warn(`[net] nothing from the host for ${Math.round(silent / 1000)} s: giving up on this link`);
+      this.net.disconnect(); // goes back to the menu (status listener above)
+      this.screens.notice(
+        'Lost the link to the host',
+        'Nothing has come through from the host for over a minute. Ask them for a new invite. ' +
+          'If you use a VPN (such as NordVPN), turn it off first: VPNs often block direct links between players.',
+      );
+    }
   }
 
   /** Point the client back at the dedicated server and drop any direct-play state. */

@@ -37,6 +37,7 @@ import { scorecard } from './Hud';
 import { audio } from '../audio/Audio';
 import { LockerPreview } from './LockerPreview';
 import type { LocalHost } from '../net/LocalHost';
+import { LINK_QUIET_MS } from '../net/NetClient';
 import { APP_VERSION } from '../version';
 
 const WORLD_EMOJI: Record<string, string> = {
@@ -590,11 +591,14 @@ export class Screens {
       }
       if (tries === 4) {
         this.readyWant = null;
-        g.ui.toast(
-          "The host isn't getting your Ready. Ask them to force start, or leave and join again",
-          'bad',
-          6000,
-        );
+        // When nothing at all is coming back from the host, the link warning says so already;
+        // blaming the Ready would point at the wrong problem.
+        if (g.net.silentMs < LINK_QUIET_MS)
+          g.ui.toast(
+            "The host isn't getting your Ready. Ask them to force start, or leave and join again",
+            'bad',
+            6000,
+          );
         this.lobbyKey = ''; // redraw from the host's view of us
         if (g.state === 'lobby' && !this.inLobbySub) this.lobby();
         return;

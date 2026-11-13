@@ -3,6 +3,11 @@ import { EventBus } from '../core/EventBus';
 
 export type NetStatus = 'offline' | 'connecting' | 'online';
 
+/** Host silent this long: tell the player (the host answers every 2 s ping and re-sends the room every 3 s). */
+export const LINK_QUIET_MS = 8_000;
+/** Direct link silent this long: give up on it (longer than relinkOnDrop gets to bring it back). */
+export const LINK_DEAD_MS = 75_000;
+
 interface NetEvents {
   msg: S2CMsg;
   status: NetStatus;
@@ -196,6 +201,7 @@ export class NetClient {
     tr.onopen = () => {
       if (!current()) return;
       this.retry = 0;
+      this.heardAt = performance.now();
       this.hello();
       this.setStatus('online');
       clearInterval(this.pingTimer);
@@ -265,7 +271,20 @@ export class NetClient {
     this.stats.msgsOut++;
   }
 
+  /** When anything last arrived on the current link (performance.now ms). */
+  private heardAt = 0;
+
+  /**
+   * How long the host has been silent, in ms (0 while not online). It answers every ping (sent
+   * every 2 s) and re-sends the room every 3 s, so a few seconds of silence means the link is
+   * up on paper but nothing is getting through.
+   */
+  get silentMs(): number {
+    return this.status === 'online' ? performance.now() - this.heardAt : 0;
+  }
+
   private receive(data: string): void {
+    this.heardAt = performance.now();
     let raw: unknown;
     try {
       raw = JSON.parse(data);
@@ -295,6 +314,11 @@ export class NetClient {
       if (msg.t === 'joined') this.token = msg.token;
       if (msg.t === 'left') this.token = null;
     }
-    this.bus.emit('msg', msg);
+    try {
+      this.bus.emit('msg', msg);
+    } catch (e) {
+      // Say which message broke, or a screen that silently stops updating is all anyone sees.
+      console.error(`[net] handling '${msg.t}' failed:`, e);
+    }
   }
 }

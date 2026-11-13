@@ -141,9 +141,16 @@ export function candidateVariant(candidate: string, round: number): string {
  * keep re-offering the peer's addresses (restarting checks) until connected or `forMs` runs out.
  * Resolves true once connected.
  */
-export function keepKnocking(pc: RTCPeerConnection, candidates: string[], mid: string, forMs: number): Promise<boolean> {
+export function keepKnocking(
+  pc: RTCPeerConnection,
+  candidates: string[],
+  mid: string,
+  forMs: number,
+  /** First variant round to offer: a later knock must not repeat variants the browser already has. */
+  firstRound = 0,
+): Promise<boolean> {
   return new Promise((resolve) => {
-    let round = 0;
+    let round = firstRound;
     const end = Date.now() + forMs;
     const knock = () => {
       for (const c of candidates)
@@ -174,6 +181,76 @@ export function keepKnocking(pc: RTCPeerConnection, candidates: string[], mid: s
 /** How long each side keeps trying while the other is still copying/pasting codes. */
 export const GUEST_KNOCK_MS = 15 * 60_000;
 export const HOST_KNOCK_MS = 3 * 60_000;
+/** How long a link that dropped mid-game keeps trying to come back. */
+export const RELINK_MS = 60_000;
+
+/**
+ * After a link is up, keep it up. Over the internet the route between two players can die after
+ * connecting (a router or VPN dropping the port mapping, a network switch, a VPN reconnecting):
+ * the browser then marks the link `disconnected`/`failed` but keeps the data channel open, so
+ * nothing gets through in either direction and nothing says so. When that happens, re-offer the
+ * peer's addresses (fresh variants, which restarts the connection checks), exactly as while
+ * connecting. Both sides do it, so whichever side's router needs the first packet gets it.
+ * Returns a function that stops watching.
+ */
+export function relinkOnDrop(
+  pc: RTCPeerConnection,
+  candidates: string[],
+  mid: string,
+  label: string,
+  forMs = RELINK_MS,
+): () => void {
+  let knocking = false;
+  let round = 1000; // well past the variants offered while connecting
+  const onState = () => {
+    const s = pc.connectionState;
+    console.info(`[direct] ${label}: link ${s} (ice ${pc.iceConnectionState})`);
+    if (s === 'connected') {
+      // Back (the knock below ends itself on this same event). Ready for the next drop at once:
+      // a link can fall over again seconds after recovering.
+      knocking = false;
+      void logRoute(pc, label);
+      return;
+    }
+    if ((s !== 'disconnected' && s !== 'failed') || knocking) return;
+    knocking = true;
+    const from = round;
+    round += 100; // the next knock offers variants the browser hasn't seen
+    console.warn(`[direct] ${label}: link ${s}, re-offering the other side's addresses`);
+    void keepKnocking(pc, candidates, mid, forMs, from).then((ok) => {
+      if (!ok) knocking = false; // gave up (or closed): a later drop may try again
+      console.info(`[direct] ${label}: ${ok ? 'link recovered' : 'link could not be recovered'}`);
+    });
+  };
+  pc.addEventListener('connectionstatechange', onState);
+  return () => pc.removeEventListener('connectionstatechange', onState);
+}
+
+/**
+ * Log which route a link uses (direct on the LAN, through each side's router, or one found while
+ * connecting), without the addresses. This is what to look at when a link misbehaves.
+ */
+export async function logRoute(pc: RTCPeerConnection, label: string): Promise<void> {
+  try {
+    const stats = await pc.getStats();
+    let pairId: string | undefined;
+    stats.forEach((s: { type?: string; selectedCandidatePairId?: string }) => {
+      if (s.type === 'transport' && s.selectedCandidatePairId) pairId = s.selectedCandidatePairId;
+    });
+    if (!pairId) return;
+    const pair = stats.get(pairId) as { localCandidateId?: string; remoteCandidateId?: string; currentRoundTripTime?: number };
+    const local = stats.get(pair.localCandidateId ?? '') as
+      | { candidateType?: string; networkType?: string; protocol?: string }
+      | undefined;
+    const remote = stats.get(pair.remoteCandidateId ?? '') as { candidateType?: string } | undefined;
+    const rtt = pair.currentRoundTripTime !== undefined ? `${Math.round(pair.currentRoundTripTime * 1000)} ms` : '?';
+    console.info(
+      `[direct] ${label}: route ${local?.candidateType}/${local?.networkType ?? '?'} -> ${remote?.candidateType} (${local?.protocol}, rtt ${rtt})`,
+    );
+  } catch {
+    /* stats are best-effort */
+  }
+}
 
 /**
  * Guest side: turn a host's invite code into a reply code. Resolves `channel` once the host
@@ -203,10 +280,16 @@ export async function answerInvite(inviteCode: string): Promise<{
   await gatherComplete(pc);
   const reply = await encodeCode({ sdp: pc.localDescription!.sdp });
   let cancelled = false;
+  let stopRelink = () => {};
   const cancel = () => {
     cancelled = true;
+    stopRelink();
     pc.close();
   };
+  // Once the link is up, bring it back if its route dies mid-game (see relinkOnDrop).
+  void opened.then(() => {
+    if (!cancelled) stopRelink = relinkOnDrop(pc, offer.candidates, offer.mid, 'link to host');
+  });
   const channel = Promise.race([
     opened.then((dc) => (cancelled ? new Promise<RTCDataChannel>(() => undefined) : dc)),
     keepKnocking(pc, offer.candidates, offer.mid, GUEST_KNOCK_MS).then(async (ok) => {

@@ -49,6 +49,29 @@ function setDisplayMode(mode: DisplayMode): DisplayMode {
   return mode;
 }
 
+/**
+ * The game's console, kept in userData/logs/game.log (the previous one in game.old.log, ~1 MB
+ * each). Connection problems happen on players' machines, far from any dev tools: this is what
+ * to ask for when one does ("send me %APPDATA%\Putt-Putt Planet\logs\game.log").
+ */
+const LOG_MAX_BYTES = 1024 * 1024;
+let logFile: string | null = null;
+function gameLog(line: string): void {
+  try {
+    if (!logFile) {
+      const dir = path.join(app.getPath('userData'), 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      logFile = path.join(dir, 'game.log');
+      fs.appendFileSync(logFile, `\n=== ${new Date().toISOString()} Putt-Putt Planet ${app.getVersion()} (${process.platform} ${os.release()})\n`);
+    }
+    if (fs.existsSync(logFile) && fs.statSync(logFile).size > LOG_MAX_BYTES)
+      fs.renameSync(logFile, logFile.replace(/game\.log$/, 'game.old.log'));
+    fs.appendFileSync(logFile, `${new Date().toISOString().slice(11, 23)} ${line}\n`);
+  } catch {
+    /* logging must never break the game */
+  }
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1280,
@@ -66,6 +89,13 @@ function createWindow(): void {
       spellcheck: false,
     },
   });
+  win.webContents.on('console-message', (e) => {
+    if (e.level === 'debug') return;
+    gameLog(`[${e.level}] ${e.message}`);
+  });
+  win.webContents.on('render-process-gone', (_e, d) => gameLog(`[error] renderer gone: ${d.reason} (${d.exitCode})`));
+  win.webContents.on('unresponsive', () => gameLog('[warning] window not responding'));
+  win.webContents.on('responsive', () => gameLog('[info] window responding again'));
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: 'deny' };

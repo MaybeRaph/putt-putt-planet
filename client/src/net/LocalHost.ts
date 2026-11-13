@@ -1,7 +1,16 @@
 import { Lobby, memoryStorage, NET, type Conn, type Interval } from '@ppp/shared';
 import { EventBus } from '../core/EventBus';
 import type { Transport } from './NetClient';
-import { HOST_KNOCK_MS, ICE_SERVERS, decodeCode, encodeCode, gatherComplete, keepKnocking, splitCandidates } from './p2p';
+import {
+  HOST_KNOCK_MS,
+  ICE_SERVERS,
+  decodeCode,
+  encodeCode,
+  gatherComplete,
+  keepKnocking,
+  relinkOnDrop,
+  splitCandidates,
+} from './p2p';
 
 export type InviteState = 'waiting' | 'connecting' | 'connected' | 'failed' | 'closed';
 
@@ -165,7 +174,9 @@ export class LocalHost {
       throw new Error("That reply code doesn't belong to this invite — each friend needs their own invite");
     }
     void keepKnocking(peer.pc, answer.candidates, answer.mid, HOST_KNOCK_MS).then((ok) => {
-      if (ok || peer.invite.state !== 'connecting') return;
+      // Up: from now on, bring the link back if its route dies mid-game (see relinkOnDrop).
+      if (ok) return void relinkOnDrop(peer.pc, answer.candidates, answer.mid, `invite #${id}`);
+      if (peer.invite.state !== 'connecting') return;
       peer.invite.state = 'failed';
       this.emit();
     });

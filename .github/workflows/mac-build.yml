@@ -1,0 +1,45 @@
+# Builds the Mac app (.dmg + universal .zip) for a release tag and attaches it to that release.
+# A Mac build can only be made on a Mac; this lets a release made on Windows ship one too.
+# Run it by hand: Actions → Mac build → Run workflow → tag (e.g. v1.8.8), or
+#   gh workflow run mac-build.yml -f tag=v1.8.8
+# The release for the tag must exist already (a draft is fine).
+name: Mac build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach the Mac files to (e.g. v1.8.8)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build (universal .dmg + .zip, ad-hoc signed as in desktop/package.json)
+        run: npm run desktop:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Attach to the release
+        run: |
+          ls -la desktop/release
+          gh release upload "$TAG" desktop/release/*.dmg desktop/release/*-mac.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
