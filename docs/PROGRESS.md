@@ -23,6 +23,7 @@
 | v1.7.2 Windows 11 ready-up fix (lost first messages), host Force start, larger message limit | ✅ done (see below) |
 | v1.8 graphics overhaul: stylised CC0 scenery models, painted skies, stylised water, film grain, retuned presets | ✅ done (see below) |
 | v1.8.1 instant quality changes, clean leaf edges, anti-aliasing setting, grain flicker fix | ✅ done (see below) |
+| v1.8.2 golden-hour lighting, volumetric light shafts, moving sun | ✅ done (see below) |
 
 **Next steps (not started):** real accounts/auth; persist rooms across server restarts; switch the client to the non-`compat` Rapier build (separate .wasm, ~1 MB smaller download); optional outline pass; hand-tuned pars from playtesting with humans (current pars are designer estimates, sanity-checked by the solver).
 
@@ -66,6 +67,16 @@
 - Tests: 40 (physics, rules, progression, protocol, course data + solver spot-checks, lobby/room integration, latency interpolation). `npm run validate:courses` sweeps all 45 holes.
 - Bug bash fixes: Esc couldn't resume (controls disabled while paused); solo sim kept running while paused; three r187 shadow-map deprecation.
 - Production: vendor chunk split (app 94 KB gz, three 150 KB, rapier 1.67 MB), inline boot splash for instant first paint, single-process server (static + ws), path-traversal guarded, standalone server bundle verified from an empty dir. Dockerfile written (Docker not installed on the dev machine, so the image build itself is untested).
+
+## v1.8.2 — golden-hour lighting (done)
+- **`rendering/lighting.ts`**: per-world golden-hour looks (`GOLDEN`: sky stops, warm fog, sun colour/strength, cool fill, warm bounce, IBL strength, sun elevation 14–20° and azimuth, shaft strength). `goldenTheme(theme)` restyles a course theme for rendering only (`PlayScene.loadHole`, `MenuBackdrop.show`); course data keeps its daytime colours, so other clients and the course cards are unaffected. Thick fog (the Fog Bank omen) keeps its grey. Space keeps its starlight, with a slightly lower star.
+- **Moving sun**: `sunAt(kit, t)` swings the sun ±16° in compass and ±4° in height over a 5-minute cycle (about 0.25°/s). `Renderer.aimSun()` re-aims the light, shadow camera, sky disc and the shared `liveSun` vector (the water's highlight uniform holds that same vector) every frame. Shadows were already redrawn every frame, so it costs nothing. Setting `movingSun` (default on; off under reduced motion), which puts the sun back in its resting place.
+- **Light shafts** (`rendering/GodRays.ts`): a ray march through a thin ground-hugging haze (height falloff 5 m, up to 48 m), sampling the sun's shadow map (`sampler2DShadow`) at each step, at half resolution (Medium 0.35) with interleaved-gradient jitter and a two-pass blur. Henyey–Greenstein forward scattering (g 0.62) makes it strongest looking into the sun; air in shadow dims the image slightly, which deepens the beams. Needs the scene depth: the multisampled scene target now carries a `DepthTexture`. Compositing happens inside the grade pass (no extra full-screen pass; doing it separately cost ~1 ms on High). Steps: Medium 12, High 20, Ultra 24; off on Low (no shadows).
+- **Backlit foliage**: `addTranslucency()` patches three's light loop so grass blades, canopies and plants glow with the sun's light when it is behind them (respects shadows).
+- **Sky**: soft-edged sun disc, tight corona and wide glow; warm horizon on the sun's side, dimmer sky opposite; a Belt of Venus pink band; clouds lit gold on the sun's side, rosy opposite, lavender undersides; per-world sunset cloud colours.
+- **Grade**: saturation 1.08, contrast 1.12, split tone (shade towards teal-blue, light towards amber), stronger vignette.
+- **Cost**, Apple M2, 1440×810 at 2x, meadow hole 6, in-play camera, GPU-synced: Low 2.1 ms, Medium 9.4, High ~19, Ultra ~40 (a different camera from the v1.8 numbers, so not directly comparable). The shaft pass alone: Medium ~1.0 ms, High ~1.8 ms, Ultra ~4–5 ms.
+- Checked by eye: meadow, candy, frozen, clockwork, space, the Fog Bank omen, Low. Not verified: Windows GPUs and phones.
 
 ## v1.8.1 — graphics fixes (done)
 - **Quality applies at once**: `CourseView.rebuildScenery(density, grass)` swaps the landscape and decor in place (the course, balls and items are untouched); `PlayScene.refreshGraphics()` and `MenuBackdrop.refreshGraphics()` call it from `Game.applySettings` when the tier changes. Scenery density and grass now live in `TIERS` (one table for play and the menu). No leaks: 82 geometries / 33 textures before and after seven switches.

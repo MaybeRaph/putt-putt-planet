@@ -41,6 +41,8 @@ export interface Settings {
   aa: AntiAlias;
   /** Film grain filter strength, 0 (off) to 100. */
   grain: number;
+  /** The golden-hour sun drifts slowly across the sky (off under reduced motion too). */
+  movingSun: boolean;
   reducedMotion: boolean;
   palette: Palette;
   camSensitivity: number;
@@ -76,6 +78,7 @@ export const DEFAULT_SETTINGS: Settings = {
   quality: isMobile ? 'medium' : 'high',
   aa: 'auto',
   grain: 0,
+  movingSun: true,
   reducedMotion: typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches,
   palette: 'default',
   camSensitivity: 1,

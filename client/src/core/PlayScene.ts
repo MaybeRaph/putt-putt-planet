@@ -1,9 +1,19 @@
 import * as THREE from 'three';
-import { DEFAULT_LOADOUT, PHYSICS, REST_CRATES, REWARDS, SKELETON, type MatchEvent, type RewardId, type Vec3 } from '@ppp/shared';
+import {
+  DEFAULT_LOADOUT,
+  PHYSICS,
+  REST_CRATES,
+  REWARDS,
+  SKELETON,
+  type MatchEvent,
+  type RewardId,
+  type Vec3,
+} from '@ppp/shared';
 import type { Game } from './Game';
 import type { Session } from './Session';
 import { CourseView } from '../rendering/CourseView';
 import { TIERS } from '../rendering/Renderer';
+import { goldenTheme } from '../rendering/lighting';
 import { BallView } from '../rendering/BallView';
 import { CameraRig } from '../rendering/CameraRig';
 import { AimView } from '../rendering/AimView';
@@ -129,7 +139,8 @@ export class PlayScene {
 
     const course = this.session.course;
     const hole = course.holes[idx];
-    const theme = hole.theme ?? course.theme;
+    // Rendered at golden hour (the course files keep their daytime colours).
+    const theme = goldenTheme(hole.theme ?? course.theme);
     const tier = TIERS[this.renderer.quality];
     this.view = new CourseView(hole, theme, {
       decorDensity: tier.decor,
@@ -538,7 +549,9 @@ export class PlayScene {
     const items = this.session.activeItems();
     if (spec?.kind === 'rest' && spec.crates && hole)
       spec.crates.forEach((rw: RewardId, i) => {
-        const alive = hole.collectibles.some((c) => c.kind === 'crate' && items.has(c.id) && c.id.endsWith(`:rest${i}:${rw}`));
+        const alive = hole.collectibles.some(
+          (c) => c.kind === 'crate' && items.has(c.id) && c.id.endsWith(`:rest${i}:${rw}`),
+        );
         const p = REST_CRATES[i];
         this.hud.label(
           `crate:${i}`,
@@ -716,12 +729,21 @@ export class PlayScene {
     if (this.intro) {
       // The rig has just placed the gameplay camera; the intro blends the flyover into it.
       // Paused: the flyover waits where it is.
-      this.intro.update(this.game.paused ? 0 : dt, this.rig.camera, this.rig.camera.position.clone(), this.rig.lookPoint);
+      this.intro.update(
+        this.game.paused ? 0 : dt,
+        this.rig.camera,
+        this.rig.camera.position.clone(),
+        this.rig.lookPoint,
+      );
       if (this.intro.done) this.endIntro();
     }
     // Anything between the camera and the ball fades so you can always see your shot (during
     // the flyover: whatever hides the spot being shown).
-    view.updateOcclusion(this.rig.camera.position, this.intro && this.intro.blend < 0.5 ? this.intro.look : focus, dt);
+    view.updateOcclusion(
+      this.rig.camera.position,
+      this.intro && this.intro.blend < 0.5 ? this.intro.look : focus,
+      dt,
+    );
 
     // Slow-mo on a final putt approaching the cup (local only).
     if (this.session.kind === 'local' && !rm && me && me.phase === 'moving') {
@@ -837,7 +859,9 @@ export class PlayScene {
       this.fpsAcc.t = 0;
       this.game.ui.setFps(this.game.settings.showFps ? this.fpsAcc.fps : null);
       const net = this.game.net;
-      this.game.ui.setPing(pingReadout(this.game.settings.showPing, this.session.kind === 'remote', net.status, net.rtt));
+      this.game.ui.setPing(
+        pingReadout(this.game.settings.showPing, this.session.kind === 'remote', net.status, net.rtt),
+      );
       // The Tab board shows everyone's ping: keep it live while it is open.
       if (this.hud.fullBoardOpen) this.hud.showFullBoard(true, this.session.score(), this.session.players());
     }

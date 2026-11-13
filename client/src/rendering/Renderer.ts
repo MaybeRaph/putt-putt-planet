@@ -11,6 +11,8 @@ import type { Theme } from '@ppp/shared';
 import { Ambience } from './Ambience';
 import { setNatureEnabled, tickNature } from './nature';
 import { SKY, SKY_FRAG, SKY_VERT } from './sky';
+import { GOLDEN, liveSun, sunAt } from './lighting';
+import { GodRaysPass, RAYS_PARS, raysUniforms } from './GodRays';
 
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
 /** Anti-aliasing setting: the preset's own choice, or a fixed method. */
@@ -54,6 +56,9 @@ interface Tier {
   models: boolean;
   /** Noise octaves in the sky's clouds. */
   skyDetail: number;
+  /** Light shafts: march steps per pixel (0 = off) and the resolution scale they run at. */
+  rays: number;
+  rayScale: number;
 }
 
 /**
@@ -86,6 +91,8 @@ export const TIERS: Record<Quality, Tier> = {
     motes: 0,
     models: false,
     skyDetail: 3,
+    rays: 0,
+    rayScale: 0.5,
   },
   medium: {
     dpr: 1.5,
@@ -102,6 +109,8 @@ export const TIERS: Record<Quality, Tier> = {
     motes: 0,
     models: true,
     skyDetail: 4,
+    rays: 12,
+    rayScale: 0.35,
   },
   high: {
     dpr: 1.5,
@@ -118,6 +127,8 @@ export const TIERS: Record<Quality, Tier> = {
     motes: 260,
     models: true,
     skyDetail: 5,
+    rays: 20,
+    rayScale: 0.5,
   },
   ultra: {
     dpr: 2,
@@ -134,6 +145,8 @@ export const TIERS: Record<Quality, Tier> = {
     motes: 700,
     models: true,
     skyDetail: 6,
+    rays: 24,
+    rayScale: 0.5,
   },
 };
 
@@ -163,24 +176,38 @@ const TiltShader = {
     }`,
 };
 
-/** Colour grade + vignette, applied in linear space before tone mapping (OutputPass). */
+/**
+ * Cinematic colour grade + vignette, applied in linear space before tone mapping (OutputPass):
+ * saturation and contrast, then a golden-hour split tone (shadows pushed towards cool teal-blue,
+ * highlights towards warm amber) and a soft vignette.
+ */
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
-    uVignette: { value: 0.28 },
-    uSaturation: { value: 1.22 },
-    uContrast: { value: 1.08 },
-    uWarm: { value: new THREE.Vector3(1.02, 1.0, 0.97) },
+    uVignette: { value: 0.34 },
+    uSaturation: { value: 1.08 },
+    uContrast: { value: 1.12 },
+    uWarm: { value: new THREE.Vector3(1.0, 1.0, 1.0) },
+    uShadowTint: { value: new THREE.Vector3(0.86, 0.95, 1.12) },
+    uHighTint: { value: new THREE.Vector3(1.08, 1.0, 0.88) },
+    uSplit: { value: 1 },
+    ...raysUniforms(),
   },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `uniform sampler2D tDiffuse; uniform float uVignette; uniform float uSaturation; uniform float uContrast; uniform vec3 uWarm; varying vec2 vUv;
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float uVignette; uniform float uSaturation; uniform float uContrast; uniform vec3 uWarm;
+    uniform vec3 uShadowTint; uniform vec3 uHighTint; uniform float uSplit; varying vec2 vUv;
+    ${RAYS_PARS}
     void main(){
       vec4 c = texture2D(tDiffuse, vUv);
+      c.rgb = applyRays(c.rgb, vUv);
       float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
       c.rgb = mix(vec3(l), c.rgb, uSaturation);
       c.rgb = max(vec3(0.0), (c.rgb - 0.18) * uContrast + 0.18);
+      // Split tone by brightness (linear light: 0.04 is deep shade, 0.6 is sunlit).
+      float k = smoothstep(0.03, 0.55, l);
+      c.rgb *= mix(vec3(1.0), mix(uShadowTint, uHighTint, k), uSplit);
       c.rgb *= uWarm;
-      float v = smoothstep(0.9, 0.25, length(vUv - 0.5) * 1.3);
+      float v = smoothstep(0.95, 0.25, length(vUv - 0.5) * 1.3);
       c.rgb *= mix(1.0 - uVignette, 1.0, v);
       gl_FragColor = c;
     }`,
@@ -229,6 +256,13 @@ export class Renderer {
   private gtao: GTAOPass | null = null;
   private tilt: ShaderPass | null = null;
   private grain: ShaderPass | null = null;
+  private rays: GodRaysPass | null = null;
+  private grade: ShaderPass | null = null;
+  /** Lets the sun drift slowly across the sky while you play. */
+  private dynamicSun = true;
+  /** Centre and radius the shadow camera is fitted to (the sun is re-aimed every frame). */
+  private readonly shadowCenter = new THREE.Vector3();
+  private shadowRadius = 20;
   /** Anti-aliasing setting (auto = the quality tier's choice). */
   private aa: AntiAlias = 'auto';
   /** Frame counter: the film grain gets a fresh pattern every frame. */
@@ -339,6 +373,8 @@ export class Renderer {
     this.gtao = null;
     this.tilt = null;
     this.grain = null;
+    this.rays = null;
+    this.grade = null;
     const size = this.gl.getDrawingBufferSize(new THREE.Vector2());
     // Only the buffer the scene is drawn into needs MSAA (RenderPass draws into readBuffer =
     // renderTarget2); the ping-pong partner stays single-sampled.
@@ -348,6 +384,12 @@ export class Renderer {
     const glc = this.gl.getContext() as WebGL2RenderingContext;
     this.composer.renderTarget2.samples = Math.min(aa.samples, glc.getParameter(glc.MAX_SAMPLES) as number);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // Light shafts read the scene's depth, so the scene target keeps a depth texture.
+    const raysOn = T.rays > 0 && T.shadow > 0 && T.grade;
+    if (raysOn) {
+      const depth = new THREE.DepthTexture(size.x, size.y, THREE.UnsignedIntType);
+      this.composer.renderTarget2.depthTexture = depth;
+    }
     if (T.ao) {
       const gtao = new GTAOPass(this.scene, this.camera, size.x * T.ao, size.y * T.ao);
       gtao.updateGtaoMaterial({
@@ -375,7 +417,25 @@ export class Renderer {
       this.tilt = new ShaderPass(TiltShader);
       this.composer.addPass(this.tilt);
     }
-    if (T.grade) this.composer.addPass(new ShaderPass(GradeShader));
+    if (T.grade) {
+      this.grade = new ShaderPass(GradeShader);
+      if (raysOn) {
+        // The shafts are drawn early (before bloom) but composited by the grade pass.
+        this.rays = new GodRaysPass(
+          this.camera,
+          this.sun,
+          this.composer.renderTarget2.depthTexture!,
+          this.grade.uniforms,
+          {
+            steps: T.rays,
+            scale: T.rayScale,
+          },
+        );
+        this.composer.insertPass(this.rays, 1 + (this.gtao ? 1 : 0));
+        this.configureRays();
+      }
+      this.composer.addPass(this.grade);
+    }
     this.composer.addPass(new OutputPass());
     // Edge filters work on the final display image (after tone mapping), before the grain.
     if (aa.filter === 'fxaa') this.composer.addPass(new FXAAPass());
@@ -399,6 +459,16 @@ export class Renderer {
     this.setQuality(this.quality);
   }
 
+  /** Moving sun on or off; off puts the sun back in its resting place. */
+  setDynamicSun(on: boolean): void {
+    if (on === this.dynamicSun) return;
+    this.dynamicSun = on;
+    if (!on && this.lastTheme) {
+      sunAt(this.lastTheme.decorKit, null, this.sunDir);
+      this.aimSun();
+    }
+  }
+
   /** Film grain strength, 0 (off) to 100. */
   setGrain(level: number): void {
     this.grainLevel = Math.max(0, Math.min(100, level || 0));
@@ -412,11 +482,10 @@ export class Renderer {
     this.lastTheme = theme;
     const u = this.skyMat.uniforms;
     const st = SKY[theme.decorKit];
-    const space = theme.decorKit === 'space';
     u.uTop.value.set(theme.skyTop);
     u.uBottom.value.set(theme.skyBottom);
-    if (st.mid) u.uMid.value.set(st.mid);
-    else u.uMid.value.set(theme.skyTop).lerp(new THREE.Color(theme.skyBottom), 0.5);
+    const look = GOLDEN[theme.decorKit];
+    u.uMid.value.set(look.skyMid);
     u.uSunColor.value.set(theme.sun);
     u.uHalo.value = st.halo;
     u.uCloudLit.value.set(st.cloudLit);
@@ -425,8 +494,9 @@ export class Renderer {
     u.uLayered.value = st.layered;
     u.uCirrus.value = st.cirrus;
     u.uExtra.value = st.extra;
-    this.sunDir.set(...st.sun).normalize();
+    sunAt(theme.decorKit, this.dynamicSun ? this.time : null, this.sunDir);
     u.uSunDir.value.copy(this.sunDir);
+    liveSun.copy(this.sunDir);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.set(theme.fog);
     // Heavy fog (the Fog Bank omen): exact distances from the camera, and the sky itself turns
@@ -446,8 +516,10 @@ export class Renderer {
     this.sun.color.set(theme.sun);
     this.sun.intensity = theme.sunIntensity * 1.35;
     this.hemi.color.set(theme.ambient);
-    this.hemi.groundColor.set(theme.ground);
-    this.scene.environmentIntensity = space ? 0.45 : 0.75;
+    this.hemi.groundColor.set(theme.ground).lerp(new THREE.Color(look.bounce), 0.6);
+    this.hemi.intensity = look.fill;
+    this.scene.environmentIntensity = look.env;
+    this.configureRays();
     this.ambience.applyTheme(theme);
     this.buildEnvironment();
   }
@@ -474,16 +546,38 @@ export class Renderer {
   fitShadow(min: THREE.Vector3, max: THREE.Vector3): void {
     const c = min.clone().add(max).multiplyScalar(0.5);
     const r = min.distanceTo(max) / 2 + 3;
-    const dir = this.sunDir;
-    this.sun.position.copy(c).addScaledVector(dir, r + 15);
-    this.sun.target.position.copy(c);
+    this.shadowCenter.copy(c);
+    this.shadowRadius = r;
+    this.groundY = min.y;
+    this.aimSun();
+    this.configureRays();
     const cam = this.sun.shadow.camera;
     cam.left = cam.bottom = -r;
     cam.right = cam.top = r;
     cam.near = 1;
     cam.far = r * 2 + 40;
     cam.updateProjectionMatrix();
+  }
+
+  /** Lowest point of the current hole: the light-shaft haze lies on it. */
+  private groundY = 0;
+
+  /** Points the sun (light, shadows, sky disc, water glints) along `sunDir`. */
+  private aimSun(): void {
+    const dir = this.sunDir;
+    this.sun.position.copy(this.shadowCenter).addScaledVector(dir, this.shadowRadius + 15);
+    this.sun.target.position.copy(this.shadowCenter);
     this.skyMat.uniforms.uSunDir.value.copy(dir);
+    liveSun.copy(dir);
+  }
+
+  /** Per-world light-shaft colour and strength (none in space or in thick fog). */
+  private configureRays(): void {
+    const theme = this.lastTheme;
+    if (!this.rays || !theme) return;
+    const look = GOLDEN[theme.decorKit];
+    const dense = theme.fogFar < 40;
+    this.rays.configure(look.rayColor, dense ? look.rays * 0.4 : look.rays, this.groundY);
   }
 
   resize(): void {
@@ -507,6 +601,10 @@ export class Renderer {
     if (this.contextLost) return;
     this.time += dt;
     this.skyMat.uniforms.uTime.value = this.time;
+    if (this.dynamicSun && this.lastTheme) {
+      sunAt(this.lastTheme.decorKit, this.time, this.sunDir);
+      this.aimSun();
+    }
     tickNature(this.time);
     this.frame = (this.frame + 1) % 100000;
     if (this.grain) this.grain.uniforms.uTime.value = this.frame;

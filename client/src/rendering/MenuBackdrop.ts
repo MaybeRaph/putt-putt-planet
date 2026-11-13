@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Course } from '@ppp/shared';
 import { CourseView } from './CourseView';
 import { TIERS, type Renderer } from './Renderer';
+import { goldenTheme } from './lighting';
 
 /** Slowly orbiting view of a hole behind the menus. */
 export class MenuBackdrop {
@@ -19,9 +20,10 @@ export class MenuBackdrop {
     const hole = course.holes[holeIndex % course.holes.length];
     console.info(`[boot] backdrop ${course.id} hole ${holeIndex + 1}`);
     const t = TIERS[this.renderer.quality];
-    this.view = new CourseView(hole, course.theme, { decorDensity: t.decor * 0.8, grass: t.grass / 2 });
+    const theme = goldenTheme(course.theme);
+    this.view = new CourseView(hole, theme, { decorDensity: t.decor * 0.8, grass: t.grass / 2 });
     this.renderer.scene.add(this.view.root);
-    this.renderer.applyTheme(course.theme);
+    this.renderer.applyTheme(theme);
     this.renderer.fitShadow(this.view.bounds.min, this.view.bounds.max);
     this.center.copy(this.view.bounds.min).add(this.view.bounds.max).multiplyScalar(0.5);
     const size = this.view.bounds.max.clone().sub(this.view.bounds.min);

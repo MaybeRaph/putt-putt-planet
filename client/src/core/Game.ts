@@ -73,6 +73,7 @@ export class Game {
     this.renderer.setAntiAlias(this.settings.aa);
     this.renderer.setQuality(this.settings.quality);
     this.renderer.setGrain(this.settings.grain);
+    this.renderer.setDynamicSun(this.settings.movingSun && !this.settings.reducedMotion);
     this.ui = new UIRoot(container);
     this.screens = new Screens(this);
     this.net = new NetClient(() => this.profile.profile);
@@ -122,9 +123,16 @@ export class Game {
     const hopStage = q.get('hopStage');
     if (dev) this.startLocal(dev, 'solo', Number(q.get('hole') ?? 1) - 1);
     else if (hopStage !== null) {
-      const m = new HopperMatch({ seed: Number(q.get('seed') ?? 1), players: [{ id: 'dev', name: 'Dev' }], upgrades: {}, keepsakes: [] });
+      const m = new HopperMatch({
+        seed: Number(q.get('seed') ?? 1),
+        players: [{ id: 'dev', name: 'Dev' }],
+        upgrades: {},
+        keepsakes: [],
+      });
       const i = Math.max(0, Math.min(SKELETON.length - 1, Number(hopStage)));
-      const omen = (OMEN_IDS as readonly string[]).includes(q.get('omen') ?? '') ? (q.get('omen') as OmenId) : null;
+      const omen = (OMEN_IDS as readonly string[]).includes(q.get('omen') ?? '')
+        ? (q.get('omen') as OmenId)
+        : null;
       const hole = stageHole(m.seed, i, m.makeSpec(i, omen, null, Number(q.get('variant') ?? 0)));
       this.startLocal({ ...hopperCourse(m.seed, [hole]), id: 'hopper-preview' }, 'solo');
     } else this.goMenu();
@@ -140,7 +148,8 @@ export class Game {
     if (this.state === 'playing' && this.scene) this.scene.update(dt);
     else this.backdrop?.update(dt);
     this.renderer.render(dt);
-    if (this.frames++ === 2) console.info(`[boot] rendering (${this.renderer.gl.info.render.calls} draw calls last pass)`);
+    if (this.frames++ === 2)
+      console.info(`[boot] rendering (${this.renderer.gl.info.render.calls} draw calls last pass)`);
     requestAnimationFrame(this.frame);
   };
 
@@ -157,7 +166,10 @@ export class Game {
       const pinned = COURSES.find((x) => x.id === cid);
       const c = pinned ?? COURSES[Math.floor(Math.random() * COURSES.length)];
       if (q.has('orbit')) this.backdrop.freeze = Number(q.get('orbit'));
-      this.backdrop.show(c, pinned ? Math.max(0, Number(hn || 1) - 1) : Math.floor(Math.random() * c.holes.length));
+      this.backdrop.show(
+        c,
+        pinned ? Math.max(0, Number(hn || 1) - 1) : Math.floor(Math.random() * c.holes.length),
+      );
     }
   }
 
@@ -221,7 +233,16 @@ export class Game {
         keepsakes: [p.hopper.keepsake],
       });
       const course = hopperCourse(match.seed, match.cfg.holes);
-      const session = new LocalSession(course, 'hopper', p.id, p.name, this.profile.loadout(), course.holes, 0, match);
+      const session = new LocalSession(
+        course,
+        'hopper',
+        p.id,
+        p.name,
+        this.profile.loadout(),
+        course.holes,
+        0,
+        match,
+      );
       this.beginPlaying(session);
       this.ui.setLoading(null);
     }, 30);
@@ -302,7 +323,9 @@ export class Game {
     if (now - this.lastRehello < 1500) return; // every ping draws the same error until it lands
     this.lastRehello = now;
     const code = this.room?.code ?? this.joinCode;
-    console.warn(`[net] the host doesn't know us yet: saying hello again${code ? `, then joining ${code}` : ''}`);
+    console.warn(
+      `[net] the host doesn't know us yet: saying hello again${code ? `, then joining ${code}` : ''}`,
+    );
     this.net.hello();
     if (code) this.net.send({ t: 'joinRoom', code });
   }
@@ -334,7 +357,9 @@ export class Game {
   }
 
   /** Guest side of a direct game: returns the reply code, then joins once the host accepts it. */
-  async joinDirect(inviteCode: string): Promise<{ reply: string; hostName: string; connected: Promise<void> }> {
+  async joinDirect(
+    inviteCode: string,
+  ): Promise<{ reply: string; hostName: string; connected: Promise<void> }> {
     // Only one attempt at a time: a second invite pasted while the first link is still trying
     // would otherwise leave two links racing, and whichever opened last stole the connection.
     this.endDirect();
@@ -362,7 +387,11 @@ export class Game {
       this.joinCode = code.trim().toUpperCase();
       this.net.send({ t: 'joinRoom', code: this.joinCode });
     } catch (e) {
-      this.ui.toast(`${(e as Error).message}. Check the address and that you're on the same network.`, 'bad', 5000);
+      this.ui.toast(
+        `${(e as Error).message}. Check the address and that you're on the same network.`,
+        'bad',
+        5000,
+      );
       this.endDirect();
     }
   }
@@ -388,7 +417,9 @@ export class Game {
   }
 
   async connect(): Promise<void> {
-    this.ui.setLoading(this.net.kind === 'server' && this.net.isDefaultServer ? 'Connecting to the server…' : 'Connecting…');
+    this.ui.setLoading(
+      this.net.kind === 'server' && this.net.isDefaultServer ? 'Connecting to the server…' : 'Connecting…',
+    );
     try {
       await this.net.connect();
     } finally {
@@ -546,6 +577,7 @@ export class Game {
     }
     this.renderer.setAntiAlias(this.settings.aa);
     this.renderer.setGrain(this.settings.grain);
+    this.renderer.setDynamicSun(this.settings.movingSun && !this.settings.reducedMotion);
     audio.setVolumes(this.settings.master, this.settings.music, this.settings.sfx);
     if (this.scene) {
       this.scene.hud.palette = this.settings.palette;

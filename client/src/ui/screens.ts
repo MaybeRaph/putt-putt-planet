@@ -100,7 +100,12 @@ export class Screens {
         'div',
         { class: 'menu-buttons' },
         h('button', { class: 'btn primary big', onclick: () => this.courseSelect() }, '⛳ Play Solo'),
-        h('button', { class: 'btn big hopper-btn', onclick: () => this.clubhouse() }, '🪐 Planet Hopper', h('small', {}, 'roguelike run')),
+        h(
+          'button',
+          { class: 'btn big hopper-btn', onclick: () => this.clubhouse() },
+          '🪐 Planet Hopper',
+          h('small', {}, 'roguelike run'),
+        ),
         h('button', { class: 'btn big', onclick: () => this.multiplayer() }, '👥 Play with Friends'),
         h('button', { class: 'btn big', onclick: () => this.daily() }, '📅 Daily Challenge'),
         h(
@@ -121,7 +126,11 @@ export class Screens {
       window.pppNative?.quit
         ? h(
             'button',
-            { class: 'btn small quit-desktop', title: 'Close the game', onclick: () => void window.pppNative?.quit?.() },
+            {
+              class: 'btn small quit-desktop',
+              title: 'Close the game',
+              onclick: () => void window.pppNative?.quit?.(),
+            },
             '⏻ Quit to desktop',
           )
         : null,
@@ -217,7 +226,11 @@ export class Screens {
             'div',
             { class: 'panel mp-card' },
             h('h3', {}, '🏠 Host a direct game'),
-            h('p', { class: 'muted' }, 'The game runs on your device. Send each friend an invite code (up to 5 friends), they send back a reply code. Works across the internet and on the same Wi-Fi.'),
+            h(
+              'p',
+              { class: 'muted' },
+              'The game runs on your device. Send each friend an invite code (up to 5 friends), they send back a reply code. Works across the internet and on the same Wi-Fi.',
+            ),
             h('button', { class: 'btn primary big', onclick: () => void g.hostDirect() }, 'Host direct game'),
           ),
           h(
@@ -231,8 +244,16 @@ export class Screens {
             'div',
             { class: 'panel mp-card' },
             h('h3', {}, '📡 Local network'),
-            h('p', { class: 'muted' }, lan ? "Host on this computer's network, or join a host by its address." : "Join a friend's desktop game by its network address."),
-            lan ? h('button', { class: 'btn big', onclick: () => void g.hostLan() }, 'Host on local network') : null,
+            h(
+              'p',
+              { class: 'muted' },
+              lan
+                ? "Host on this computer's network, or join a host by its address."
+                : "Join a friend's desktop game by its network address.",
+            ),
+            lan
+              ? h('button', { class: 'btn big', onclick: () => void g.hostLan() }, 'Host on local network')
+              : null,
             h('button', { class: 'btn', onclick: () => this.joinAddress() }, 'Join by address'),
           ),
         ),
@@ -244,7 +265,11 @@ export class Screens {
             'div',
             { class: 'panel mp-card' },
             h('h3', {}, '🏠 Create a room'),
-            h('p', { class: 'muted' }, 'Uses the online game server. Share the 6-letter code with up to 5 friends.'),
+            h(
+              'p',
+              { class: 'muted' },
+              'Uses the online game server. Share the 6-letter code with up to 5 friends.',
+            ),
             h('button', { class: 'btn big', onclick: () => void g.createRoom() }, 'Create room'),
           ),
           h(
@@ -307,7 +332,17 @@ export class Screens {
         { class: 'row' },
         h('button', { class: 'btn small primary', onclick: () => void copy() }, '📋 Copy'),
         typeof navigator.share === 'function'
-          ? h('button', { class: 'btn small', onclick: () => void navigator.share({ title: 'Putt-Putt Planet', text: `${label}\n${code}` }).catch(() => undefined) }, '📤 Share')
+          ? h(
+              'button',
+              {
+                class: 'btn small',
+                onclick: () =>
+                  void navigator
+                    .share({ title: 'Putt-Putt Planet', text: `${label}\n${code}` })
+                    .catch(() => undefined),
+              },
+              '📤 Share',
+            )
           : null,
       ),
     );
@@ -328,7 +363,12 @@ export class Screens {
         step2.append(
           h('h3', {}, `Step 2 — send this reply code back to ${hostName}`),
           this.codeBox(reply, 'My Putt-Putt Planet reply code (paste it in your invite):'),
-          h('div', { class: 'waiting' }, h('div', { class: 'spinner small' }), `Waiting for ${hostName} to paste your reply code… keep this screen open`),
+          h(
+            'div',
+            { class: 'waiting' },
+            h('div', { class: 'spinner small' }),
+            `Waiting for ${hostName} to paste your reply code… keep this screen open`,
+          ),
         );
         go.textContent = 'Code ready';
         await connected;
@@ -343,19 +383,42 @@ export class Screens {
         'div',
         { class: 'screen' },
         this.header('Join a direct game', () => this.multiplayer()),
-        h('div', { class: 'panel join-direct' }, h('h3', {}, 'Step 1 — paste the invite code from your host'), input, go, step2),
-        h('p', { class: 'muted center small on-dark' }, 'Your devices connect directly to each other. If it fails on different networks, try the same Wi-Fi.'),
+        h(
+          'div',
+          { class: 'panel join-direct' },
+          h('h3', {}, 'Step 1 — paste the invite code from your host'),
+          input,
+          go,
+          step2,
+        ),
+        h(
+          'p',
+          { class: 'muted center small on-dark' },
+          'Your devices connect directly to each other. If it fails on different networks, try the same Wi-Fi.',
+        ),
       ),
     );
   }
 
   joinAddress(): void {
     const g = this.game;
-    const addr = h('input', { class: 'text', placeholder: '192.168.1.20', spellcheck: false, value: localStorage.getItem('ppp.lastAddress') ?? '' });
-    const code = h('input', { class: 'text code-input', maxlength: 6, placeholder: 'ABC123', autocapitalize: 'characters', spellcheck: false });
+    const addr = h('input', {
+      class: 'text',
+      placeholder: '192.168.1.20',
+      spellcheck: false,
+      value: localStorage.getItem('ppp.lastAddress') ?? '',
+    });
+    const code = h('input', {
+      class: 'text code-input',
+      maxlength: 6,
+      placeholder: 'ABC123',
+      autocapitalize: 'characters',
+      spellcheck: false,
+    });
     code.addEventListener('input', () => (code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, '')));
     const go = () => {
-      if (!addr.value.trim() || code.value.length !== 6) return g.ui.toast('Enter the address and the 6-letter room code', 'bad');
+      if (!addr.value.trim() || code.value.length !== 6)
+        return g.ui.toast('Enter the address and the 6-letter room code', 'bad');
       try {
         localStorage.setItem('ppp.lastAddress', addr.value.trim());
       } catch {
@@ -371,7 +434,11 @@ export class Screens {
         h(
           'div',
           { class: 'panel join-direct' },
-          h('p', { class: 'muted' }, "Your host's desktop game shows its address and room code in the lobby."),
+          h(
+            'p',
+            { class: 'muted' },
+            "Your host's desktop game shows its address and room code in the lobby.",
+          ),
           h('label', { class: 'setting' }, h('span', {}, 'Host address'), addr),
           h('label', { class: 'setting' }, h('span', {}, 'Room code'), code),
           h('button', { class: 'btn primary big', onclick: go }, 'Join ▶'),
@@ -401,25 +468,66 @@ export class Screens {
         row.dataset.state = inv.state;
         row.dataset.code = String(!!inv.code);
         clear(row);
-        const title = h('div', { class: 'invite-title' }, `Invite #${inv.id}`, inv.name ? ` — ${inv.name}` : '');
+        const title = h(
+          'div',
+          { class: 'invite-title' },
+          `Invite #${inv.id}`,
+          inv.name ? ` — ${inv.name}` : '',
+        );
         if (inv.state === 'waiting') {
-          const reply = h('textarea', { class: 'code-box', rows: 2, placeholder: "Paste your friend's reply code", spellcheck: false });
+          const reply = h('textarea', {
+            class: 'code-box',
+            rows: 2,
+            placeholder: "Paste your friend's reply code",
+            spellcheck: false,
+          });
           const ok = h('button', { class: 'btn small primary' }, 'Connect');
-          ok.onclick = () => host.acceptReply(inv.id, reply.value).catch((e: Error) => g.ui.toast(e.message, 'bad', 5000));
+          ok.onclick = () =>
+            host.acceptReply(inv.id, reply.value).catch((e: Error) => g.ui.toast(e.message, 'bad', 5000));
           row.append(
             title,
             h('div', { class: 'small muted' }, '1. Send this invite code to one friend:'),
-            this.codeBox(inv.code, "Join my Putt-Putt Planet game! Open the game → Play with Friends → Enter invite code, and paste:"),
+            this.codeBox(
+              inv.code,
+              'Join my Putt-Putt Planet game! Open the game → Play with Friends → Enter invite code, and paste:',
+            ),
             h('div', { class: 'small muted' }, '2. Paste the reply code they send back:'),
             h('div', { class: 'row' }, reply, ok),
           );
-        } else if (inv.state === 'connecting') row.append(title, h('div', { class: 'waiting' }, h('div', { class: 'spinner small' }), 'Connecting… (can take up to a minute)'));
-        else if (inv.state === 'connected') row.append(title, h('div', { class: 'ok' }, `✓ Connected${inv.name ? `: ${inv.name}` : ''}`));
+        } else if (inv.state === 'connecting')
+          row.append(
+            title,
+            h(
+              'div',
+              { class: 'waiting' },
+              h('div', { class: 'spinner small' }),
+              'Connecting… (can take up to a minute)',
+            ),
+          );
+        else if (inv.state === 'connected')
+          row.append(title, h('div', { class: 'ok' }, `✓ Connected${inv.name ? `: ${inv.name}` : ''}`));
         else
           row.append(
             title,
-            h('div', { class: 'bad' }, inv.state === 'failed' ? "Couldn't connect. Make sure your friend kept the join screen open, then create a new invite. Some networks (mobile hotspots, school/office Wi-Fi) block direct links." : 'Disconnected'),
-            h('button', { class: 'btn small', onclick: () => { host.cancelInvite(inv.id); rows.get(inv.id)?.remove(); rows.delete(inv.id); } }, 'Remove'),
+            h(
+              'div',
+              { class: 'bad' },
+              inv.state === 'failed'
+                ? "Couldn't connect. Make sure your friend kept the join screen open, then create a new invite. Some networks (mobile hotspots, school/office Wi-Fi) block direct links."
+                : 'Disconnected',
+            ),
+            h(
+              'button',
+              {
+                class: 'btn small',
+                onclick: () => {
+                  host.cancelInvite(inv.id);
+                  rows.get(inv.id)?.remove();
+                  rows.delete(inv.id);
+                },
+              },
+              'Remove',
+            ),
           );
       }
     };
@@ -441,7 +549,11 @@ export class Screens {
       'div',
       { class: 'panel invite-panel' },
       h('h3', {}, '🔗 Direct game — you are the host'),
-      h('p', { class: 'muted small' }, 'One invite code per friend. Keep this game open while you play: it is the server.'),
+      h(
+        'p',
+        { class: 'muted small' },
+        'One invite code per friend. Keep this game open while you play: it is the server.',
+      ),
       create,
       list,
     );
@@ -478,14 +590,19 @@ export class Screens {
       }
       if (tries === 4) {
         this.readyWant = null;
-        g.ui.toast("The host isn't getting your Ready. Ask them to force start, or leave and join again", 'bad', 6000);
+        g.ui.toast(
+          "The host isn't getting your Ready. Ask them to force start, or leave and join again",
+          'bad',
+          6000,
+        );
         this.lobbyKey = ''; // redraw from the host's view of us
         if (g.state === 'lobby' && !this.inLobbySub) this.lobby();
         return;
       }
       tries++;
       console.info(`[lobby] ready -> ${ready} (try ${tries}, link ${g.net.status}, in room: ${!!cur})`);
-      if (tries === 1 && g.net.status !== 'online') g.ui.toast('Not connected to the host — leave and join again', 'bad', 4000);
+      if (tries === 1 && g.net.status !== 'online')
+        g.ui.toast('Not connected to the host — leave and join again', 'bad', 4000);
       g.net.send({ t: 'ready', ready });
       this.readyRetry = window.setTimeout(attempt, 1500);
     };
@@ -497,7 +614,9 @@ export class Screens {
     const g = this.game;
     const room = g.room;
     if (!room) return;
-    const waiting = room.players.filter((p) => p.id !== room.hostId && p.connected && !p.ready).map((p) => p.name);
+    const waiting = room.players
+      .filter((p) => p.id !== room.hostId && p.connected && !p.ready)
+      .map((p) => p.name);
     const close = () => g.ui.showOverlay(null);
     g.ui.showOverlay(
       h(
@@ -592,7 +711,14 @@ export class Screens {
             { class: 'kick-row' },
             h('span', {}, p.id === room.hostId ? '👑 ' : '', p.name, p.connected ? '' : ' (reconnecting…)'),
             p.id !== me
-              ? h('button', { class: 'btn small danger', onclick: () => this.confirmKick(p.id, p.name, () => this.playersModal()) }, '✕ Remove')
+              ? h(
+                  'button',
+                  {
+                    class: 'btn small danger',
+                    onclick: () => this.confirmKick(p.id, p.name, () => this.playersModal()),
+                  },
+                  '✕ Remove',
+                )
               : h('small', { class: 'muted' }, 'you'),
           ),
         ),
@@ -663,7 +789,11 @@ export class Screens {
           isHost && p.id !== me
             ? h(
                 'button',
-                { class: 'btn small danger lp-kick', title: `Remove ${p.name} from the game`, onclick: () => this.confirmKick(p.id, p.name) },
+                {
+                  class: 'btn small danger lp-kick',
+                  title: `Remove ${p.name} from the game`,
+                  onclick: () => this.confirmKick(p.id, p.name),
+                },
                 '✕ Remove',
               )
             : null,
@@ -735,7 +865,11 @@ export class Screens {
           : h(
               'div',
               { class: 'room-code panel' },
-              h('div', { class: 'muted' }, g.lanAddresses.length ? 'Local network game — friends use "Join by address"' : 'Room code'),
+              h(
+                'div',
+                { class: 'muted' },
+                g.lanAddresses.length ? 'Local network game — friends use "Join by address"' : 'Room code',
+              ),
               h('div', { class: 'code' }, room.code),
               g.lanAddresses.length
                 ? h('div', { class: 'lan-addr' }, 'Address: ', h('b', {}, g.lanAddresses.join('  or  ')))
@@ -780,7 +914,11 @@ export class Screens {
             ? [
                 h(
                   'button',
-                  { class: 'btn primary big', disabled: !allReady, onclick: () => g.net.send({ t: 'start' }) },
+                  {
+                    class: 'btn primary big',
+                    disabled: !allReady,
+                    onclick: () => g.net.send({ t: 'start' }),
+                  },
                   allReady ? '▶ Start game' : 'Waiting for players to ready up…',
                 ),
                 allReady
@@ -815,10 +953,17 @@ export class Screens {
                 },
                 meReady ? 'Not ready' : '✓ Ready!',
               ),
-          h('button', { class: 'btn', onclick: () => {
-            this.locker(() => g.returnToLobby());
-            this.inLobbySub = true;
-          } }, '🎽 Locker'),
+          h(
+            'button',
+            {
+              class: 'btn',
+              onclick: () => {
+                this.locker(() => g.returnToLobby());
+                this.inLobbySub = true;
+              },
+            },
+            '🎽 Locker',
+          ),
         ),
       ),
       !refresh,
@@ -1202,7 +1347,11 @@ export class Screens {
           },
         }),
       );
-    const select = <K extends 'quality' | 'palette' | 'aa'>(label: string, key: K, opts: [Settings[K], string][]) =>
+    const select = <K extends 'quality' | 'palette' | 'aa'>(
+      label: string,
+      key: K,
+      opts: [Settings[K], string][],
+    ) =>
       h(
         'label',
         { class: 'setting' },
@@ -1218,7 +1367,7 @@ export class Screens {
           ...opts.map(([v, l]) => h('option', { value: v, selected: s[key] === v }, l)),
         ),
       );
-    const toggle = (label: string, key: 'reducedMotion' | 'invertY' | 'showFps' | 'showPing') =>
+    const toggle = (label: string, key: 'reducedMotion' | 'invertY' | 'showFps' | 'showPing' | 'movingSun') =>
       h(
         'label',
         { class: 'setting' },
@@ -1304,6 +1453,7 @@ export class Screens {
           ['smaa', 'SMAA + MSAA 4x (best)'],
         ]),
         this.grainSetting(),
+        toggle('Moving sun', 'movingSun'),
         toggle('Show FPS', 'showFps'),
         toggle('Show ping (online)', 'showPing'),
         h('h3', {}, 'Accessibility'),
@@ -1326,7 +1476,11 @@ export class Screens {
   /** Film grain: a 0-100 slider with its value (0 shows "Off"). */
   private grainSetting(): HTMLElement {
     const g = this.game;
-    const out = h('span', { class: 'muted setting-value' }, g.settings.grain ? String(g.settings.grain) : 'Off');
+    const out = h(
+      'span',
+      { class: 'muted setting-value' },
+      g.settings.grain ? String(g.settings.grain) : 'Off',
+    );
     return h(
       'label',
       { class: 'setting' },
@@ -1552,7 +1706,8 @@ export class Screens {
         );
       }),
     );
-    const kept = hp.keepsake && hp.keepsake in TRINKETS ? TRINKETS[hp.keepsake as keyof typeof TRINKETS] : null;
+    const kept =
+      hp.keepsake && hp.keepsake in TRINKETS ? TRINKETS[hp.keepsake as keyof typeof TRINKETS] : null;
     g.ui.showScreen(
       h(
         'div',
@@ -1568,7 +1723,7 @@ export class Screens {
             h(
               'p',
               { class: 'muted' },
-              'Hop across four planets of brand-new holes that get harder the deeper you go. The team shares its hearts: over par costs hearts, birdies win them back. Pick routes at every fork, collect trinkets, beat each sector\'s boss hole, and rest at the Wishing Green. Stardust you collect is banked here, even when the run ends.',
+              "Hop across four planets of brand-new holes that get harder the deeper you go. The team shares its hearts: over par costs hearts, birdies win them back. Pick routes at every fork, collect trinkets, beat each sector's boss hole, and rest at the Wishing Green. Stardust you collect is banked here, even when the run ends.",
             ),
             h(
               'div',
@@ -1594,12 +1749,20 @@ export class Screens {
               },
               '👥 Co-op run',
             ),
-            h('div', { class: 'muted small' }, kept ? `Keepsake: ${kept.icon} ${kept.name}` : 'No keepsake equipped'),
+            h(
+              'div',
+              { class: 'muted small' },
+              kept ? `Keepsake: ${kept.icon} ${kept.name}` : 'No keepsake equipped',
+            ),
           ),
         ),
         h('h3', { class: 'section-title' }, '🌟 Upgrades (permanent)'),
         h('div', { class: 'club-grid' }, ...upgrades),
-        h('h3', { class: 'section-title' }, `🎒 Keepsake — start every run with one trinket you've found (${discovered.length}/${TRINKET_IDS.length})`),
+        h(
+          'h3',
+          { class: 'section-title' },
+          `🎒 Keepsake — start every run with one trinket you've found (${discovered.length}/${TRINKET_IDS.length})`,
+        ),
         h('div', { class: 'panel' }, keepsakes),
         h('h3', { class: 'section-title' }, '🌩️ Omens you may meet'),
         h(
@@ -1611,7 +1774,12 @@ export class Screens {
     );
   }
 
-  private hopperResults(score: ScoreState, players: SessionPlayer[], grant: Grant | null, online: boolean): void {
+  private hopperResults(
+    score: ScoreState,
+    players: SessionPlayer[],
+    grant: Grant | null,
+    online: boolean,
+  ): void {
     const g = this.game;
     const hs = score.hopper!;
     const won = hs.result === 'won';
@@ -1628,7 +1796,12 @@ export class Screens {
       const card = score.card[e] ?? [];
       const tot = card.reduce<number>((a, b) => a + (b ?? 0), 0);
       const par = card.reduce<number>((a, b, i) => a + (b == null ? 0 : (score.pars[i] ?? 0)), 0);
-      return h('div', { class: 'row' }, h('span', {}, players.find((p) => p.id === e)?.name ?? '?'), h('b', {}, `${tot} strokes (${relScore(tot, par)})`));
+      return h(
+        'div',
+        { class: 'row' },
+        h('span', {}, players.find((p) => p.id === e)?.name ?? '?'),
+        h('b', {}, `${tot} strokes (${relScore(tot, par)})`),
+      );
     });
     g.ui.showScreen(
       h(
@@ -1652,7 +1825,9 @@ export class Screens {
             'div',
             { class: 'row' },
             h('span', {}, 'Trinkets'),
-            hs.trinkets.length ? h('span', {}, ...hs.trinkets.map((t) => trinketChip(t, true, hs.levels?.[t] ?? 1))) : h('span', { class: 'muted' }, 'none'),
+            hs.trinkets.length
+              ? h('span', {}, ...hs.trinkets.map((t) => trinketChip(t, true, hs.levels?.[t] ?? 1)))
+              : h('span', { class: 'muted' }, 'none'),
           ),
           ...strokes,
         ),
@@ -1669,7 +1844,12 @@ export class Screens {
                   { class: 'res-level' },
                   levelEl,
                   h('div', { class: 'xpbar big' }, bar),
-                  h('div', { class: 'res-nums' }, h('span', {}, '+', xpNum, ' XP'), h('span', {}, '+', coinNum, ' 🪙')),
+                  h(
+                    'div',
+                    { class: 'res-nums' },
+                    h('span', {}, '+', xpNum, ' XP'),
+                    h('span', {}, '+', coinNum, ' 🪙'),
+                  ),
                 ),
                 lines,
                 unlocks,
@@ -1684,7 +1864,17 @@ export class Screens {
             : h('button', { class: 'btn primary', onclick: () => g.startHopper() }, '🔁 New run'),
           online
             ? h('button', { class: 'btn', onclick: () => g.leaveOnline() }, '🏠 Leave')
-            : h('button', { class: 'btn', onclick: () => { g.goMenu(); this.clubhouse(); } }, '🪐 Clubhouse'),
+            : h(
+                'button',
+                {
+                  class: 'btn',
+                  onclick: () => {
+                    g.goMenu();
+                    this.clubhouse();
+                  },
+                },
+                '🪐 Clubhouse',
+              ),
           !online ? h('button', { class: 'btn', onclick: () => g.goMenu() }, '🏠 Menu') : null,
         ),
       ),

@@ -7,16 +7,16 @@ import type { Theme } from '@ppp/shared';
  *  - big stylised cumulus: domain-warped fbm cut into puffy shapes, lit from the sun side with
  *    cool lavender undersides and bright rims (the classic cartoon battle-royale look),
  *  - high wispy streaks,
- *  - per-world extras: a pastel rainbow (candy), aurora ribbons (frozen), a low golden-hour sun
- *    with layered clouds (clockwork), and nebulae, twinkling stars and a galaxy band (space).
+ *  - per-world extras: a pastel rainbow (candy), aurora ribbons (frozen), layered sunset clouds
+ *    (clockwork), and nebulae, twinkling stars and a galaxy band (space).
+ * Since v1.8.2 every world is drawn at golden hour: a low sun, warm horizon, clouds lit warm on
+ * the sun's side and cool lavender opposite it.
  * `uDetail` trims the noise octaves on lower quality tiers.
  */
 
 type Kit = Theme['decorKit'];
 
 export interface SkyStyle {
-  /** Mid-sky colour between the theme's top and bottom (null = blend of the two). */
-  mid: string | null;
   cloudLit: string;
   cloudShade: string;
   /** Cumulus coverage 0..1. */
@@ -26,66 +26,55 @@ export interface SkyStyle {
   cirrus: number;
   /** Extra effect: 0 none, 1 rainbow, 2 aurora, 3 space. */
   extra: number;
-  /** Sun direction (also drives the shadows). */
-  sun: [number, number, number];
   /** Sun halo strength. */
   halo: number;
 }
 
+/** Cloud styles per world, for the golden-hour light (sky colours and the sun: lighting.ts). */
 export const SKY: Record<Kit, SkyStyle> = {
   meadow: {
-    mid: '#7cc4ff',
-    cloudLit: '#ffffff',
-    cloudShade: '#a9b7e0',
-    clouds: 0.55,
-    layered: 0,
-    cirrus: 0.5,
+    cloudLit: '#ffe4c2',
+    cloudShade: '#8f90c2',
+    clouds: 0.5,
+    layered: 0.25,
+    cirrus: 0.6,
     extra: 0,
-    sun: [0.55, 0.75, 0.38],
-    halo: 0.35,
+    halo: 0.95,
   },
   candy: {
-    mid: '#ffb8e2',
-    cloudLit: '#fff6fb',
-    cloudShade: '#e7a3d6',
-    clouds: 0.6,
-    layered: 0,
-    cirrus: 0.3,
+    cloudLit: '#ffe4cf',
+    cloudShade: '#c486c9',
+    clouds: 0.55,
+    layered: 0.2,
+    cirrus: 0.4,
     extra: 1,
-    sun: [0.5, 0.7, 0.5],
-    halo: 0.4,
+    halo: 0.95,
   },
   frozen: {
-    mid: '#a9d4ff',
-    cloudLit: '#ffffff',
-    cloudShade: '#b4c6e6',
+    cloudLit: '#ffe6d6',
+    cloudShade: '#9ca5d8',
     clouds: 0.35,
-    layered: 0.3,
+    layered: 0.4,
     cirrus: 0.8,
     extra: 2,
-    sun: [0.45, 0.6, 0.66],
-    halo: 0.3,
+    halo: 0.85,
   },
   clockwork: {
-    mid: '#f2a477',
-    cloudLit: '#ffd9a8',
-    cloudShade: '#a8627a',
+    cloudLit: '#ffd39e',
+    cloudShade: '#8a5076',
     clouds: 0.6,
     layered: 1,
     cirrus: 0.6,
     extra: 0,
-    sun: [0.74, 0.5, 0.48],
-    halo: 0.9,
+    halo: 1.15,
   },
   space: {
-    mid: '#14103a',
     cloudLit: '#ff7ad9',
     cloudShade: '#3a1f8a',
     clouds: 0,
     layered: 0,
     cirrus: 0,
     extra: 3,
-    sun: [0.55, 0.75, 0.38],
     halo: 0.15,
   },
 };
@@ -132,10 +121,16 @@ void main(){
   if (h < 0.0) col = mix(uBottom, uBottom * 0.92, smoothstep(0.0, -0.3, h));
 
   float s = max(dot(d, uSunDir), 0.0);
-  col += uSunColor * (pow(s, 900.0) * 6.0 + pow(s, 60.0) * 0.35 * uHalo + pow(s, 6.0) * 0.22 * uHalo);
-  // Warm glow along the horizon on the sun's side (strongest for a low sun).
-  float sideSun = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(uSunDir.x, 0.0, uSunDir.z))), 0.0), 3.0);
-  col += uSunColor * sideSun * smoothstep(0.35, 0.0, abs(h)) * 0.22 * uHalo;
+  // Low golden-hour sun: a soft-edged disc, a tight corona and a wide warm glow.
+  float disc = smoothstep(0.99935, 0.99975, s);
+  col += uSunColor * (disc * 7.0 + pow(s, 280.0) * 1.1 * uHalo + pow(s, 36.0) * 0.42 * uHalo + pow(s, 5.0) * 0.2 * uHalo);
+  // Warm glow along the horizon on the sun's side, and a cooler, dimmer sky opposite it.
+  float toward = dot(normalize(vec3(d.x, 0.0, d.z) + 1e-4), normalize(vec3(uSunDir.x, 0.0, uSunDir.z) + 1e-4)) * 0.5 + 0.5;
+  float sideSun = pow(toward, 3.0);
+  col += uSunColor * sideSun * smoothstep(0.4, 0.0, abs(h)) * 0.26 * uHalo;
+  col *= mix(0.9, 1.0, toward);
+  // Belt of Venus: a soft pink band above the horizon on the side away from the sun.
+  col += vec3(1.0, 0.55, 0.62) * uHalo * 0.09 * pow(1.0 - toward, 2.0) * exp(-pow((h - 0.07) / 0.08, 2.0));
 
   if (uExtra > 2.5) {
     // Space: nebula clouds, a galaxy band, and stars.
@@ -205,9 +200,13 @@ void main(){
         // Undersides darker, tops brighter; a soft painted step between them.
         lit *= mix(0.75, 1.1, smoothstep(edge, edge + 0.35, c));
         lit = smoothstep(0.1, 0.9, lit);
-        vec3 cc = mix(uCloudShade, uCloudLit, lit);
-        // Silver lining where a thin edge faces the sun.
-        cc += uSunColor * pow(s, 4.0) * (1.0 - smoothstep(edge, edge + 0.1, c)) * 0.6;
+        // Clouds on the sun's side catch warm gold light, with cool lavender undersides.
+        // (Opposite the sun they catch the low light on their faces: a rosy pink.)
+        vec3 litCol = uCloudLit * mix(vec3(1.02, 0.86, 0.9), vec3(1.06, 1.0, 0.92), toward);
+        vec3 cc = mix(uCloudShade * mix(0.85, 1.05, toward), litCol, lit);
+        // Silver lining where a thin edge faces the sun, and the sun glowing through thin cloud.
+        float thin = 1.0 - smoothstep(edge, edge + 0.1, c);
+        cc += uSunColor * (pow(s, 4.0) * thin * 0.7 + pow(s, 24.0) * 0.5);
         // Distant clouds melt into the horizon haze.
         cc = mix(cc, uBottom, smoothstep(0.18, 0.0, h) * 0.55);
         col = mix(col, cc, cov);

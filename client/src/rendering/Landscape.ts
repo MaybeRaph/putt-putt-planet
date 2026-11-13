@@ -2,16 +2,74 @@ import * as THREE from 'three';
 import type { Theme } from '@ppp/shared';
 import { fbm, noise2, ridged, smoothstep } from './noise';
 import { natureActive, rockMaterial, rockModels } from './nature';
+import { addTranslucency } from './lighting';
 
 type Kit = Theme['decorKit'];
 
 /** Per-world terrain palette: low grass, high grass, dirt, rock, peak. */
-const PALETTE: Record<Kit, { g1: string; g2: string; dirt: string; rock: string; rock2: string; peak: string; grassBase: string; grassTip: string }> = {
-  meadow: { g1: '#4f9e3f', g2: '#76c257', dirt: '#8a6a48', rock: '#8a7f75', rock2: '#a89c8e', peak: '#eef3f8', grassBase: '#3f8a35', grassTip: '#a6dd6a' },
-  candy: { g1: '#ff9ccb', g2: '#ffc2e0', dirt: '#d98bb5', rock: '#b07ccf', rock2: '#cfa3e6', peak: '#fff4fb', grassBase: '#ff7fb8', grassTip: '#ffe0f0' },
-  frozen: { g1: '#dbe8f2', g2: '#eef5fb', dirt: '#b9c9d6', rock: '#6f8296', rock2: '#8fa2b5', peak: '#ffffff', grassBase: '#9fb7c4', grassTip: '#f2f8fc' },
-  clockwork: { g1: '#7a6553', g2: '#8c7561', dirt: '#5e4b3d', rock: '#55473d', rock2: '#6e5c4f', peak: '#a07b5c', grassBase: '#6b5a3a', grassTip: '#b49a62' },
-  space: { g1: '#2f2a50', g2: '#3b3560', dirt: '#2a2645', rock: '#4a4470', rock2: '#5b5488', peak: '#7d74c4', grassBase: '#4a3f7a', grassTip: '#9f8cff' },
+const PALETTE: Record<
+  Kit,
+  {
+    g1: string;
+    g2: string;
+    dirt: string;
+    rock: string;
+    rock2: string;
+    peak: string;
+    grassBase: string;
+    grassTip: string;
+  }
+> = {
+  meadow: {
+    g1: '#4f9e3f',
+    g2: '#76c257',
+    dirt: '#8a6a48',
+    rock: '#8a7f75',
+    rock2: '#a89c8e',
+    peak: '#eef3f8',
+    grassBase: '#3f8a35',
+    grassTip: '#a6dd6a',
+  },
+  candy: {
+    g1: '#ff9ccb',
+    g2: '#ffc2e0',
+    dirt: '#d98bb5',
+    rock: '#b07ccf',
+    rock2: '#cfa3e6',
+    peak: '#fff4fb',
+    grassBase: '#ff7fb8',
+    grassTip: '#ffe0f0',
+  },
+  frozen: {
+    g1: '#dbe8f2',
+    g2: '#eef5fb',
+    dirt: '#b9c9d6',
+    rock: '#6f8296',
+    rock2: '#8fa2b5',
+    peak: '#ffffff',
+    grassBase: '#9fb7c4',
+    grassTip: '#f2f8fc',
+  },
+  clockwork: {
+    g1: '#7a6553',
+    g2: '#8c7561',
+    dirt: '#5e4b3d',
+    rock: '#55473d',
+    rock2: '#6e5c4f',
+    peak: '#a07b5c',
+    grassBase: '#6b5a3a',
+    grassTip: '#b49a62',
+  },
+  space: {
+    g1: '#2f2a50',
+    g2: '#3b3560',
+    dirt: '#2a2645',
+    rock: '#4a4470',
+    rock2: '#5b5488',
+    peak: '#7d74c4',
+    grassBase: '#4a3f7a',
+    grassTip: '#9f8cff',
+  },
 };
 
 export interface LandscapeOpts {
@@ -29,7 +87,8 @@ export interface LandscapeOpts {
 }
 
 /** Deterministic 0..1 value for a hole seed and a slot (per-hole variety in the scenery). */
-const vary = (seed: number, slot: number): number => noise2(seed * 0.731 + slot * 12.9898, slot * 4.1414 + 0.5, 911);
+const vary = (seed: number, slot: number): number =>
+  noise2(seed * 0.731 + slot * 12.9898, slot * 4.1414 + 0.5, 911);
 
 /**
  * Crater field: scattered bowls with raised rims (space). One candidate crater per grid cell,
@@ -85,7 +144,14 @@ export class Landscape {
   private grassShader: { uniforms: Record<string, { value: unknown }> } | null = null;
 
   /** Per-hole character: how strong each landform is and which way ridges and dunes run. */
-  private readonly style: { swell: number; feature: number; ridge: number; angle: number; tint: number; light: number };
+  private readonly style: {
+    swell: number;
+    feature: number;
+    ridge: number;
+    angle: number;
+    tint: number;
+    light: number;
+  };
 
   /** Stylised look (smooth painted terrain, model cliffs, hazier distance) on the model tiers. */
   private readonly stylized = natureActive();
@@ -214,7 +280,11 @@ export class Landscape {
       col.set([tmp.r, tmp.g, tmp.b], i * 3);
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: !this.stylized });
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.95,
+      flatShading: !this.stylized,
+    });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'terrain';
@@ -245,13 +315,17 @@ export class Landscape {
       const col: number[] = [];
       const idx: number[] = [];
       const low = new THREE.Color(P.rock).lerp(fog, L.mix);
-      const high = new THREE.Color(kit === 'space' ? P.peak : P.rock2).lerp(fog, L.mix).lerp(sky, 0.25 + 0.15 * li + hz);
+      const high = new THREE.Color(kit === 'space' ? P.peak : P.rock2)
+        .lerp(fog, L.mix)
+        .lerp(sky, 0.25 + 0.15 * li + hz);
       for (let i = 0; i <= n; i++) {
         const a = (i / n) * Math.PI * 2;
         // Sample the noise on a circle so the ring closes without a seam.
         const nx = Math.cos(a) * L.freq,
           nz = Math.sin(a) * L.freq;
-        let hgt = L.base + ridged(nx + 7, nz + 3, 4, L.seed) * L.amp * (0.55 + 0.45 * fbm(nx * 0.6, nz * 0.6, 2, L.seed + 5));
+        let hgt =
+          L.base +
+          ridged(nx + 7, nz + 3, 4, L.seed) * L.amp * (0.55 + 0.45 * fbm(nx * 0.6, nz * 0.6, 2, L.seed + 5));
         // Sector silhouettes: flat-topped mesas, stepped ice, rounded candy hills.
         if (kit === 'clockwork') hgt = shelves(hgt, 14) + 4;
         else if (kit === 'frozen') hgt = hgt * 1.15 + (i % 2) * 5;
@@ -299,10 +373,13 @@ export class Landscape {
       variants.push(g);
       this.owned.push(g);
     }
-    const mats = [new THREE.MeshStandardMaterial({ color: P.rock, roughness: 0.95, flatShading: true }), new THREE.MeshStandardMaterial({ color: P.rock2, roughness: 0.95, flatShading: true })];
+    const mats = [
+      new THREE.MeshStandardMaterial({ color: P.rock, roughness: 0.95, flatShading: true }),
+      new THREE.MeshStandardMaterial({ color: P.rock2, roughness: 0.95, flatShading: true }),
+    ];
     this.owned.push(...mats);
     let r = seed;
-    const rand = () => ((r = (r * 16807) % 2147483647) / 2147483647);
+    const rand = () => (r = (r * 16807) % 2147483647) / 2147483647;
     const R = Math.max(half.x, half.y);
     for (let v = 0; v < variants.length; v++) {
       const count = 5;
@@ -317,7 +394,9 @@ export class Landscape {
         const w = 2.2 + rand() * 3;
         m.compose(
           new THREE.Vector3(x, this.heightAt(x, z) + tall * 0.35, z),
-          new THREE.Quaternion().setFromEuler(new THREE.Euler((rand() - 0.5) * 0.2, rand() * 6, (rand() - 0.5) * 0.2)),
+          new THREE.Quaternion().setFromEuler(
+            new THREE.Euler((rand() - 0.5) * 0.2, rand() * 6, (rand() - 0.5) * 0.2),
+          ),
           new THREE.Vector3(w, tall, w * (0.8 + rand() * 0.4)),
         );
         im.setMatrixAt(i, m);
@@ -339,7 +418,7 @@ export class Landscape {
     if (!rocks.length || !mat) return false;
     const { center, half, kit, seed } = this.o;
     let r = seed;
-    const rand = () => ((r = (r * 16807) % 2147483647) / 2147483647);
+    const rand = () => (r = (r * 16807) % 2147483647) / 2147483647;
     const R = Math.max(half.x, half.y);
     const per = 7;
     const m = new THREE.Matrix4();
@@ -401,17 +480,29 @@ export class Landscape {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(7 * 3).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+    geo.setAttribute(
+      'normal',
+      new THREE.BufferAttribute(
+        new Float32Array(7 * 3).map((_, i) => (i % 3 === 1 ? 1 : 0)),
+        3,
+      ),
+    );
     geo.setIndex([0, 1, 2, 1, 3, 2, 2, 3, 4, 3, 5, 4, 4, 5, 6]);
     this.owned.push(geo);
 
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide });
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.9,
+      side: THREE.DoubleSide,
+    });
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = { value: 0 };
       this.grassShader = shader as unknown as { uniforms: Record<string, { value: unknown }> };
-      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;').replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float uTime;')
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
         #ifdef USE_INSTANCING
           vec3 ip = instanceMatrix[3].xyz;
         #else
@@ -421,7 +512,9 @@ export class Landscape {
         float gust = sin(uTime * 1.6 + ip.x * 0.35 + ip.z * 0.22) * 0.5 + sin(uTime * 2.7 + ip.x * 1.3) * 0.25;
         transformed.x += gust * 0.18 * bend;
         transformed.z += cos(uTime * 1.2 + ip.z * 0.5) * 0.08 * bend;`,
-      );
+        );
+      // Low sun behind the blades: they glow as the light shines through them.
+      addTranslucency(shader, 0.6);
     };
     this.grassMat = mat;
     this.owned.push(mat);
@@ -434,7 +527,7 @@ export class Landscape {
     const p = new THREE.Vector3();
     const tint = new THREE.Color();
     let seed = this.o.seed + 101;
-    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
     const blocked = (x: number, z: number) => keepOut(x, z, 0.16);
     const extent = 18;
     let placed = 0;

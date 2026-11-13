@@ -21,13 +21,14 @@ import {
 } from '@ppp/shared';
 import { canvasTexture, checkerMaterial, darken, mottleTexture, toon, woodTexture } from './materials';
 import { buildDecor } from './decor';
-import { SKY } from './sky';
+import { liveSun } from './lighting';
 import { Footprint } from './footprint';
 import { Landscape } from './Landscape';
 import { hashString } from '@ppp/shared';
 
 /** Frozen-looking floor surfaces (ice patches' texture, world-space UVs). */
-const isFrozen = (s: Solid['surface']): boolean => s === 'ice' || s === 'slick' || s === 'frost' || s === 'rime';
+const isFrozen = (s: Solid['surface']): boolean =>
+  s === 'ice' || s === 'slick' || s === 'frost' || s === 'rime';
 
 /**
  * Turns a Hole (schema data) into a Three.js scene graph. Owns every geometry/material/texture
@@ -52,7 +53,8 @@ export class CourseView {
   private readonly waterMats: THREE.ShaderMaterial[] = [];
   private readonly spinners: { obj: THREE.Object3D; speed: number }[] = [];
   private readonly springs: { obj: THREE.Object3D; pulse: number; z: Zone }[] = [];
-  private readonly tubes: { t: Tunnel; mats: THREE.MeshStandardMaterial[]; base: number; fade: number }[] = [];
+  private readonly tubes: { t: Tunnel; mats: THREE.MeshStandardMaterial[]; base: number; fade: number }[] =
+    [];
   private flag!: THREE.Group;
   private flagCloth!: THREE.Mesh;
   private flagLift = 0;
@@ -112,8 +114,14 @@ export class CourseView {
   private buildScenery(decorDensity: number, grass: number): void {
     const { hole, theme } = this;
     this.landscape = new Landscape({
-      center: new THREE.Vector2((this.bounds.min.x + this.bounds.max.x) / 2, (this.bounds.min.z + this.bounds.max.z) / 2),
-      half: new THREE.Vector2((this.bounds.max.x - this.bounds.min.x) / 2, (this.bounds.max.z - this.bounds.min.z) / 2),
+      center: new THREE.Vector2(
+        (this.bounds.min.x + this.bounds.max.x) / 2,
+        (this.bounds.min.z + this.bounds.max.z) / 2,
+      ),
+      half: new THREE.Vector2(
+        (this.bounds.max.x - this.bounds.min.x) / 2,
+        (this.bounds.max.z - this.bounds.min.z) / 2,
+      ),
       groundY: this.groundY,
       kit: theme.decorKit,
       seed: hashString(hole.id) % 100000,
@@ -205,7 +213,9 @@ export class CourseView {
     geo.addGroup(top.length, side.length, 1);
     geo.computeVertexNormals();
     // (A double-sided copy: the cached toon material is shared by every floor's sides.)
-    this.ribbonSideMat ??= this.own(Object.assign(toon(darken(this.theme.ground, 0.62)).clone(), { side: THREE.DoubleSide }));
+    this.ribbonSideMat ??= this.own(
+      Object.assign(toon(darken(this.theme.ground, 0.62)).clone(), { side: THREE.DoubleSide }),
+    );
     const sideMat = this.ribbonSideMat;
     const mesh = new THREE.Mesh(geo, [this.floorTopMaterial(s), sideMat]);
     mesh.receiveShadow = true;
@@ -260,21 +270,31 @@ export class CourseView {
         new THREE.Quaternion().setFromEuler(new THREE.Euler(s.rot[0], s.rot[1], s.rot[2])),
         new THREE.Vector3(1, 1, 1),
       );
-      const geo = s.shape === 'cylinder'
-        ? new THREE.CylinderGeometry(s.size[0] / 2, s.size[0] / 2, s.size[1], 24)
-        : new THREE.BoxGeometry(s.size[0], s.size[1], s.size[2]);
+      const geo =
+        s.shape === 'cylinder'
+          ? new THREE.CylinderGeometry(s.size[0] / 2, s.size[0] / 2, s.size[1], 24)
+          : new THREE.BoxGeometry(s.size[0], s.size[1], s.size[2]);
       if (isFrozen(s.surface)) {
         const uv = geo.attributes.uv as THREE.BufferAttribute;
-        for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * s.size[0]) / 3, (uv.getY(i) * s.size[2]) / 3);
+        for (let i = 0; i < uv.count; i++)
+          uv.setXY(i, (uv.getX(i) * s.size[0]) / 3, (uv.getY(i) * s.size[2]) / 3);
       }
       const mats = s.color
         ? [toon(s.color)]
         : s.shape === 'box'
-          ? [this.floorSide(), this.floorSide(), this.floorTopMaterial(s), this.floorSide(), this.floorSide(), this.floorSide()]
+          ? [
+              this.floorSide(),
+              this.floorSide(),
+              this.floorTopMaterial(s),
+              this.floorSide(),
+              this.floorSide(),
+              this.floorSide(),
+            ]
           : [this.floorSide(), this.floorTopMaterial(s), this.floorSide()];
       // Raised terraces can stand between the camera and a ball on the tier below, so they stay
       // separate pieces that can fade; everything low is merged.
-      const raised = separate || (this.theme.decorKit !== 'space' && computeBounds([s]).max[1] - this.groundY > 0.9);
+      const raised =
+        separate || (this.theme.decorKit !== 'space' && computeBounds([s]).max[1] - this.groundY > 0.9);
       if (raised) {
         const grp = new THREE.Group();
         const mesh = new THREE.Mesh(this.own(geo), s.color ? mats[0] : mats);
@@ -330,7 +350,11 @@ export class CourseView {
   private woodMat: THREE.Material | null = null;
   private woodMaterial(): THREE.Material {
     this.woodMat ??= this.own(
-      new THREE.MeshStandardMaterial({ color: new THREE.Color(this.theme.wall).multiplyScalar(1.15), map: woodTexture(), roughness: 0.82 }),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(this.theme.wall).multiplyScalar(1.15),
+        map: woodTexture(),
+        roughness: 0.82,
+      }),
     );
     return this.woodMat;
   }
@@ -342,14 +366,22 @@ export class CourseView {
   private queueStatic(geo: THREE.BufferGeometry, m: THREE.Matrix4, mats: THREE.Material[]): void {
     const flat = geo.index ? geo.toNonIndexed() : geo.clone();
     flat.applyMatrix4(m);
-    const groups = geo.groups.length ? geo.groups : [{ start: 0, count: flat.attributes.position.count, materialIndex: 0 }];
+    const groups = geo.groups.length
+      ? geo.groups
+      : [{ start: 0, count: flat.attributes.position.count, materialIndex: 0 }];
     for (const gr of groups) {
       const mat = mats[gr.materialIndex ?? 0] ?? mats[0];
       const part = new THREE.BufferGeometry();
       for (const name of ['position', 'normal', 'uv']) {
         const a = flat.attributes[name] as THREE.BufferAttribute | undefined;
         if (!a) continue;
-        part.setAttribute(name, new THREE.BufferAttribute(a.array.slice(gr.start * a.itemSize, (gr.start + gr.count) * a.itemSize), a.itemSize));
+        part.setAttribute(
+          name,
+          new THREE.BufferAttribute(
+            a.array.slice(gr.start * a.itemSize, (gr.start + gr.count) * a.itemSize),
+            a.itemSize,
+          ),
+        );
       }
       let list = this.staticBatches.get(mat);
       if (!list) this.staticBatches.set(mat, (list = []));
@@ -416,7 +448,11 @@ export class CourseView {
   private skirtMat: THREE.Material | null = null;
   private skirtMaterial(): THREE.Material {
     this.skirtMat ??= this.own(
-      new THREE.MeshStandardMaterial({ color: darken(this.theme.ground, 0.7), map: mottleTexture(), roughness: 0.95 }),
+      new THREE.MeshStandardMaterial({
+        color: darken(this.theme.ground, 0.7),
+        map: mottleTexture(),
+        roughness: 0.95,
+      }),
     );
     return this.skirtMat;
   }
@@ -451,7 +487,9 @@ export class CourseView {
         roughness: 0.42,
         metalness: 0,
         envMapIntensity: 0.6,
-        ...(overlay ? { transparent: true, opacity: 0.94, polygonOffset: true, polygonOffsetFactor: -2 } : {}),
+        ...(overlay
+          ? { transparent: true, opacity: 0.94, polygonOffset: true, polygonOffsetFactor: -2 }
+          : {}),
       }),
     );
   }
@@ -523,7 +561,10 @@ export class CourseView {
       dir.normalize();
       let k = 1;
       if (i > 0 && i < n - 1) {
-        const d0 = new THREE.Vector3().subVectors(p, pts[i - 1]).setY(0).normalize();
+        const d0 = new THREE.Vector3()
+          .subVectors(p, pts[i - 1])
+          .setY(0)
+          .normalize();
         k = 1 / Math.max(0.5, d0.dot(dir));
       }
       return { p, side: new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(k) };
@@ -595,7 +636,13 @@ export class CourseView {
     this.root.add(tube);
     // Rims at both mouths.
     const rimMat = this.own(
-      new THREE.MeshStandardMaterial({ color: L.rim, roughness: 0.5, metalness: L.metal, transparent: true, opacity: 1 }),
+      new THREE.MeshStandardMaterial({
+        color: L.rim,
+        roughness: 0.5,
+        metalness: L.metal,
+        transparent: true,
+        opacity: 1,
+      }),
     );
     for (const i of [0, n - 1]) {
       const { p, side } = frames[i];
@@ -621,7 +668,8 @@ export class CourseView {
       const l2 = abx * abx + abz * abz || 1e-6;
       const k = Math.max(0, Math.min(1, ((b.x - a[0]) * abx + (b.z - a[2]) * abz) / l2));
       const y = a[1] + (c[1] - a[1]) * k;
-      if (Math.hypot(b.x - a[0] - abx * k, b.z - a[2] - abz * k) < r && b.y > y - 0.4 && b.y < y + 1.4) return true;
+      if (Math.hypot(b.x - a[0] - abx * k, b.z - a[2] - abz * k) < r && b.y > y - 0.4 && b.y < y + 1.4)
+        return true;
     }
     return false;
   }
@@ -710,14 +758,11 @@ export class CourseView {
             c.fill();
           }),
         );
-        const disk = new THREE.Mesh(
-          this.own(new THREE.CylinderGeometry(r, r, 0.06, 28)),
-          [
-            this.own(new THREE.MeshStandardMaterial({ color: '#b71c3a', roughness: 0.5 })),
-            this.own(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45 })),
-            this.own(new THREE.MeshStandardMaterial({ color: '#b71c3a', roughness: 0.5 })),
-          ],
-        );
+        const disk = new THREE.Mesh(this.own(new THREE.CylinderGeometry(r, r, 0.06, 28)), [
+          this.own(new THREE.MeshStandardMaterial({ color: '#b71c3a', roughness: 0.5 })),
+          this.own(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45 })),
+          this.own(new THREE.MeshStandardMaterial({ color: '#b71c3a', roughness: 0.5 })),
+        ]);
         disk.position.y = 0.06;
         disk.rotation.y = z.rotY;
         disk.castShadow = true;
@@ -773,7 +818,6 @@ export class CourseView {
       }
       case 'water': {
         const top = z.center[1] + z.size[1] / 2;
-        const sun = SKY[this.theme.decorKit].sun;
         const mat = new THREE.ShaderMaterial({
           transparent: true,
           uniforms: {
@@ -781,7 +825,8 @@ export class CourseView {
             uColor: { value: new THREE.Color(this.theme.water) },
             uSkyTop: { value: new THREE.Color(this.theme.skyTop) },
             uSkyHor: { value: new THREE.Color(this.theme.skyBottom) },
-            uSunDir: { value: new THREE.Vector3(...sun).normalize() },
+            // The live sun direction (it drifts slowly while you play).
+            uSunDir: { value: liveSun },
             uSun: { value: new THREE.Color(this.theme.sun) },
           },
           vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
@@ -1187,7 +1232,10 @@ export class CourseView {
   /** A ball was just launched: bounce the spring pad under it (each launch, every ball). */
   pulseSpring(at: THREE.Vector3): void {
     for (const sp of this.springs)
-      if (Math.hypot(at.x - sp.z.center[0], at.z - sp.z.center[2]) < Math.max(sp.z.size[0], sp.z.size[2]) / 2 + 0.4)
+      if (
+        Math.hypot(at.x - sp.z.center[0], at.z - sp.z.center[2]) <
+        Math.max(sp.z.size[0], sp.z.size[2]) / 2 + 0.4
+      )
         sp.pulse = 1;
   }
 
@@ -1195,7 +1243,15 @@ export class CourseView {
   /** Objects faded because they stand between the camera and the ball. */
   private readonly faded = new Map<
     THREE.Object3D,
-    { alpha: number; hit: boolean; mats: { mesh: THREE.Mesh; orig: THREE.Material | THREE.Material[]; fade: THREE.Material | THREE.Material[] }[] }
+    {
+      alpha: number;
+      hit: boolean;
+      mats: {
+        mesh: THREE.Mesh;
+        orig: THREE.Material | THREE.Material[];
+        fade: THREE.Material | THREE.Material[];
+      }[];
+    }
   >();
 
   private occList: THREE.Object3D[] | null = null;

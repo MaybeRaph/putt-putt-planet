@@ -4,6 +4,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import type { Theme } from '@ppp/shared';
 import natureUrl from '../assets/nature.glb?url';
 import cliffUrl from '../assets/rocks-cliff.webp?url';
+import { addTranslucency } from './lighting';
 
 /**
  * Stylised scenery models (Quaternius' Stylized Nature MegaKit, CC0; see scripts/build-nature.ts)
@@ -275,6 +276,7 @@ function canopyMaterial(kit: Kit, tex: THREE.Texture | null, pine: boolean): THR
         `#include <emissivemap_fragment>
         totalEmissiveRadiance += diffuseColor.rgb * uGlow;`,
       );
+    addTranslucency(shader, 0.55);
   };
   mat.customProgramCacheKey = () => `canopy${kit}${pine}`;
   matCache.set(key, mat);
@@ -320,6 +322,7 @@ function plainMaterial(kit: Kit, role: Role, tex: THREE.Texture | null): THREE.M
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <map_fragment>', ALPHA_FIX)
         .replace('float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;', 'float faceDirection = 1.0;');
+      addTranslucency(shader, 0.5);
     };
     mat.customProgramCacheKey = () => 'foliage';
     m = mat;
