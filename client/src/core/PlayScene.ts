@@ -35,6 +35,8 @@ export class PlayScene {
   private view: CourseView | null = null;
   private readonly balls = new Map<string, BallView>();
   private readonly rig: CameraRig;
+  /** After a splash or out of bounds: where the camera holds before following the ball again. */
+  private hazardHold: { pos: THREE.Vector3; until: number } | null = null;
   private readonly aim = new AimView();
   private readonly particles = new Particles();
   private readonly controls: Controls;
@@ -413,6 +415,10 @@ export class PlayScene {
             size: 0.1,
           });
         if (mine) this.hud.message(ev.type === 'water' ? 'Splash! +1' : 'Out of bounds! +1', 'bad');
+        // The camera lingers on the splash for a beat, then glides back to the ball's reset spot
+        // (it used to whip straight across the course), and the ball pops back in.
+        if (mine && bv) this.hazardHold = { pos: bv.pos.clone(), until: performance.now() + 650 };
+        if (bv) bv.respawn();
         else
           this.hud.feed(
             `${this.nameOf(ev.entrant)} ${ev.type === 'water' ? 'went for a swim' : 'flew out of bounds'} (+1)`,
@@ -718,7 +724,8 @@ export class PlayScene {
     // Camera follows my ball, or the first unfinished ball when I'm done (spectate).
     const me = balls.find((b) => b.id === myId);
     let focus: THREE.Vector3;
-    if (me && me.phase !== 'holed') focus = v3(me.pos);
+    if (this.hazardHold && performance.now() < this.hazardHold.until) focus = this.hazardHold.pos;
+    else if (me && me.phase !== 'holed') focus = v3(me.pos);
     else {
       const other = balls.find((b) => b.phase !== 'holed');
       focus = other

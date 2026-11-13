@@ -448,6 +448,14 @@ export class BallView {
     return this.trail.mesh;
   }
 
+  /** Seconds left of the pop-in after a reset (0 = none). */
+  private popT = 0;
+
+  /** The ball was reset after a hazard: it pops back in where it's placed. */
+  respawn(): void {
+    this.popT = 0.95;
+  }
+
   /** Called when the ball is (re)placed without travelling (reset/teleport). */
   snap(p: THREE.Vector3): void {
     this.pos.copy(p);
@@ -515,6 +523,14 @@ export class BallView {
       s.y *= 1 - stretch * 0.3;
     }
     this.body.scale.copy(s);
+    // Pop-in after a hazard reset: hidden while the camera lingers on the splash, then it springs
+    // up to size with a little overshoot.
+    if (this.popT > 0) {
+      this.popT = Math.max(0, this.popT - dt);
+      const u = Math.min(1, Math.max(0, (0.4 - this.popT) / 0.4));
+      const k = reducedMotion ? (u > 0 ? 1 : 0) : 1 + 2.70158 * Math.pow(u - 1, 3) + 1.70158 * Math.pow(u - 1, 2);
+      this.root.scale.setScalar(Math.max(0.001, k));
+    } else if (this.root.scale.x !== 1) this.root.scale.setScalar(1);
 
     this.hat.rotation.y = this.heading;
     this.hat.position.y = R * 0.85 * s.y + Math.sin(this.squash * Math.PI) * 0.03;

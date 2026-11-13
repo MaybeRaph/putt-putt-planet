@@ -21,7 +21,7 @@ import {
 } from '@ppp/shared';
 import { canvasTexture, checkerMaterial, darken, mottleTexture, toon, woodTexture } from './materials';
 import { buildDecor } from './decor';
-import { liveSun } from './lighting';
+import { buildWater } from './water';
 import { Footprint } from './footprint';
 import { Landscape } from './Landscape';
 import { hashString } from '@ppp/shared';
@@ -82,6 +82,8 @@ export class CourseView {
     this.flushStatic();
     for (const o of hole.obstacles) this.addObstacle(o);
     for (const z of hole.zones) this.addZone(z);
+    this.courseCover = new Footprint(all, [], b.min, b.max);
+    this.addWater();
     for (const t of hole.tunnels ?? []) this.addTunnel(t);
     for (const c of hole.collectibles) this.addItem(c, opts.ownedItems?.has(c.id) ?? false);
     this.addCup();
@@ -674,6 +676,22 @@ export class CourseView {
     return false;
   }
 
+  /** Ground the course itself covers (greens, rails, blocks), without the water. */
+  private courseCover!: Footprint;
+
+  /** Ponds, brooks and lagoons: each level of water zones becomes one body of water. */
+  private addWater(): void {
+    const w = buildWater(this.hole.zones, {
+      theme: this.theme,
+      groundY: this.groundY,
+      bankMat: this.skirtMaterial(),
+      blocked: (x, z) => this.courseCover.near(x, z, 0.12),
+    });
+    this.owned.push(...w.owned);
+    this.waterMats.push(...w.animated);
+    if (w.group.children.length) this.root.add(w.group);
+  }
+
   private addZone(z: Zone): void {
     const floorY = z.center[1] - z.size[1] / 2 + 0.05;
     const mkPlane = (mat: THREE.Material, y: number) => {
@@ -816,66 +834,9 @@ export class CourseView {
         this.animTextures.push({ tex, dir: new THREE.Vector2(-1, 0), speed: boost ? 1.6 : 0.4 * z.strength });
         break;
       }
-      case 'water': {
-        const top = z.center[1] + z.size[1] / 2;
-        const mat = new THREE.ShaderMaterial({
-          transparent: true,
-          uniforms: {
-            uTime: { value: 0 },
-            uColor: { value: new THREE.Color(this.theme.water) },
-            uSkyTop: { value: new THREE.Color(this.theme.skyTop) },
-            uSkyHor: { value: new THREE.Color(this.theme.skyBottom) },
-            // The live sun direction (it drifts slowly while you play).
-            uSunDir: { value: liveSun },
-            uSun: { value: new THREE.Color(this.theme.sun) },
-          },
-          vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
-          // Stylised water: two drifting ripple layers, a fresnel reflection of this world's sky
-          // and sun, a deep-to-shallow body colour, painted highlight bands and sun sparkles.
-          fragmentShader: `uniform float uTime; uniform vec3 uColor; uniform vec3 uSkyTop; uniform vec3 uSkyHor; uniform vec3 uSunDir; uniform vec3 uSun; varying vec3 vW;
-            float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-            float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-              return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y); }
-            float waves(vec2 p){
-              return vn(p * 1.3 + uTime * vec2(0.22, 0.09)) + 0.55 * vn(p * 3.1 - uTime * vec2(0.08, 0.26)) + 0.25 * vn(p * 7.3 + uTime * vec2(0.3, -0.2));
-            }
-            void main(){
-              vec2 p = vW.xz;
-              float w0 = waves(p);
-              float e = 0.06;
-              float dx = waves(p + vec2(e, 0.0)) - w0, dz = waves(p + vec2(0.0, e)) - w0;
-              vec3 n = normalize(vec3(-dx * 2.2, 1.0, -dz * 2.2));
-              vec3 v = normalize(cameraPosition - vW);
-              float fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-              vec3 r = reflect(-v, n);
-              vec3 sky = mix(uSkyHor, uSkyTop, smoothstep(0.0, 0.55, r.y));
-              vec3 body = mix(uColor * 0.42, uColor * 0.95, smoothstep(0.6, 1.4, w0));
-              vec3 c = mix(body, sky, clamp(0.18 + fres * 1.1, 0.0, 0.85));
-              // Painted bands along the ripple crests.
-              c += vec3(1.0) * smoothstep(0.55, 0.6, fract(w0 * 2.2)) * smoothstep(0.66, 0.6, fract(w0 * 2.2)) * 0.07;
-              float sp = max(dot(r, uSunDir), 0.0);
-              c += uSun * (pow(sp, 260.0) * 2.4 + pow(sp, 18.0) * 0.12);
-              vec2 sc = p * 14.0;
-              float spark = step(0.993, h21(floor(sc) + floor(uTime * 2.5))) * smoothstep(0.32, 0.05, length(fract(sc) - 0.5));
-              c += uSun * spark * pow(sp, 4.0) * 1.4;
-              gl_FragColor = vec4(c, 0.9 + fres * 0.08);
-              #include <tonemapping_fragment>
-              #include <colorspace_fragment>
-            }`,
-        });
-        this.own(mat);
-        this.waterMats.push(mat);
-        mkPlane(mat, top - 0.14);
-        // pool bed
-        const bed = new THREE.Mesh(
-          this.own(new THREE.BoxGeometry(z.size[0], 0.2, z.size[2])),
-          toon(darken(this.theme.water, 0.5)),
-        );
-        bed.position.set(z.center[0], top - 0.75, z.center[2]);
-        bed.rotation.y = z.rotY;
-        this.root.add(bed);
+      case 'water':
+        // Drawn as whole bodies of water in addWater().
         break;
-      }
       case 'lowGravity': {
         const mat = this.own(
           new THREE.MeshBasicMaterial({

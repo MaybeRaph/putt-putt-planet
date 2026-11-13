@@ -783,13 +783,12 @@ export class Simulation {
       p[0] > this.bounds.max[0] + 1 ||
       p[2] < this.bounds.min[2] - 1 ||
       p[2] > this.bounds.max[2] + 1;
+    // Water first: a ball that flies off the course into a pond splashes (even past the bounds).
     let water = false;
-    if (!oob) {
-      for (const z of this.hole.zones) {
-        if (z.kind === 'water' && inYawBox(p, z.center, z.size, z.rotY)) {
-          water = true;
-          break;
-        }
+    for (const z of this.hole.zones) {
+      if (z.kind === 'water' && inYawBox(p, z.center, z.size, z.rotY)) {
+        water = true;
+        break;
       }
     }
     if (!oob && !water) return false;
