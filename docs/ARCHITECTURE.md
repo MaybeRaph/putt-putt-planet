@@ -37,7 +37,8 @@ client/src/
   physics/     LocalSession (runs Match in-browser for solo/offline)
   net/         NetClient (ws + lag/loss simulator), RemoteSession (snapshot interpolation)
   rendering/   Renderer, materials, sky, CourseView (schema→meshes), BallView, CameraRig, AimView, particles, post-fx
-  ui/          screens (menu, lobby, HUD, pause, settings, results, locker/shop, collection), emote wheel, chat
+  ui/          screens (menu, lobby, HUD, pause, settings, results, locker/shop, collection), emote wheel, chat,
+               main-menu character (MenuHero), Play Solo world map (WorldMap)
   audio/       Sfx, procedural music (layers by player count), ambience
   progression/ local profile store + reward application
 ```

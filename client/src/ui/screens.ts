@@ -36,6 +36,8 @@ import { h, clear, tweenNumber, relScore } from './dom';
 import { scorecard } from './Hud';
 import { audio } from '../audio/Audio';
 import { LockerPreview } from './LockerPreview';
+import { MenuHero } from './MenuHero';
+import { WorldMap, type WorldInfo } from './WorldMap';
 import type { LocalHost } from '../net/LocalHost';
 import { LINK_QUIET_MS } from '../net/NetClient';
 import { APP_VERSION } from '../version';
@@ -60,8 +62,15 @@ export class Screens {
     return h(
       'div',
       { class: 'screen-header' },
-      back ? h('button', { class: 'btn back', onclick: back }, '← Back') : null,
-      h('h2', {}, title),
+      back
+        ? h(
+            'button',
+            { class: 'btn back', onclick: back, 'aria-label': 'Back' },
+            h('span', { class: 'back-arrow' }, '◀'),
+            h('span', { class: 'back-label' }, 'Back'),
+          )
+        : null,
+      h('h2', {}, h('span', {}, title)),
       this.profileChip(),
     );
   }
@@ -71,15 +80,20 @@ export class Screens {
     const need = xpToNext(p.level);
     return h(
       'div',
-      { class: 'profile-chip' },
-      h('div', { class: 'lvl' }, String(p.level)),
+      { class: 'profile-chip', title: `Level ${p.level} · ${p.xp}/${need} XP` },
+      h('div', { class: 'lvl' }, h('span', {}, String(p.level))),
       h(
         'div',
         { class: 'pc-body' },
         h('div', { class: 'pc-name' }, p.name),
         h('div', { class: 'xpbar' }, h('i', { style: `width:${(p.xp / need) * 100}%` })),
       ),
-      h('div', { class: 'pc-stats' }, h('span', {}, `🪙 ${p.coins}`), h('span', {}, `⭐ ${starsTotal(p)}`)),
+      h(
+        'div',
+        { class: 'pc-stats' },
+        h('span', { class: 'pc-coins' }, `🪙 ${p.coins}`),
+        h('span', { class: 'pc-stars' }, `⭐ ${starsTotal(p)}`),
+      ),
     );
   }
 
@@ -87,110 +101,260 @@ export class Screens {
 
   mainMenu(): void {
     const g = this.game;
+    const holes = COURSES.reduce((a, c) => a + c.holes.length, 0);
+    const mega = (cls: string, icon: string, label: string, sub: string, onclick: () => void, i: number) =>
+      h(
+        'button',
+        { class: `btn mega ${cls}`, style: `--i:${i}`, onclick },
+        h('span', { class: 'mega-ico' }, icon),
+        h('span', { class: 'mega-text' }, h('b', {}, label), h('small', {}, sub)),
+        h('span', { class: 'mega-go', 'aria-hidden': 'true' }, '▶'),
+      );
+    const tile = (icon: string, label: string, onclick: () => void, i: number) =>
+      h(
+        'button',
+        { class: 'btn tile', style: `--i:${i}`, onclick },
+        h('span', { class: 'tile-ico' }, icon),
+        h('span', {}, label),
+      );
+
+    // Your ball, hat and putter from the Locker, live on a little green.
+    const hero = new MenuHero();
+    hero.reducedMotion = g.settings.reducedMotion;
+    hero.setLoadout(g.profile.loadout());
+    hero.onPoke = () => audio.emote();
+    const p = this.p;
     const el = h(
       'div',
       { class: 'screen main-menu' },
-      h('div', { class: 'top-right' }, this.profileChip()),
       h(
         'div',
-        { class: 'logo' },
-        h('span', { class: 'l1' }, 'Putt-Putt'),
-        h('span', { class: 'l2' }, 'Planet'),
+        { class: 'mm-top' },
+        h(
+          'div',
+          { class: 'logo', 'aria-label': 'Putt-Putt Planet' },
+          h('span', { class: 'l1' }, 'Putt-Putt'),
+          h('span', { class: 'l2' }, 'Planet'),
+        ),
+        this.profileChip(),
       ),
       h(
         'div',
-        { class: 'menu-buttons' },
-        h('button', { class: 'btn primary big', onclick: () => this.courseSelect() }, '⛳ Play Solo'),
-        h(
-          'button',
-          { class: 'btn big hopper-btn', onclick: () => this.clubhouse() },
-          '🪐 Planet Hopper',
-          h('small', {}, 'roguelike run'),
-        ),
-        h('button', { class: 'btn big', onclick: () => this.multiplayer() }, '👥 Play with Friends'),
-        h('button', { class: 'btn big', onclick: () => this.daily() }, '📅 Daily Challenge'),
+        { class: 'mm-body' },
         h(
           'div',
-          { class: 'row' },
-          h('button', { class: 'btn', onclick: () => this.locker() }, '🎽 Locker & Shop'),
-          h('button', { class: 'btn', onclick: () => this.collection() }, '💎 Collection'),
+          { class: 'mm-hero' },
+          h('div', { class: 'hero-glow' }),
+          hero.canvas,
+          h('div', { class: 'hero-plate' }, h('b', {}, p.name), h('span', {}, `Level ${p.level}`)),
+          h('button', { class: 'btn small hero-edit', onclick: () => this.locker() }, '🎽 Customise'),
+          h('div', { class: 'hero-hint' }, matchMedia('(pointer: coarse)').matches ? 'tap me!' : 'click me!'),
         ),
         h(
           'div',
-          { class: 'row' },
-          h('button', { class: 'btn', onclick: () => this.profileScreen() }, '🏅 Profile'),
-          h('button', { class: 'btn', onclick: () => this.settings(() => this.mainMenu()) }, '⚙️ Settings'),
+          { class: 'mm-actions' },
+          mega(
+            'sun',
+            '⛳',
+            'Play Solo',
+            `${COURSES.length} worlds · ${holes} holes`,
+            () => this.courseSelect(),
+            0,
+          ),
+          mega('grape hopper-btn', '🪐', 'Planet Hopper', 'roguelike run', () => this.clubhouse(), 1),
+          mega(
+            'sky',
+            '👥',
+            'Play with Friends',
+            `up to ${RULES.maxPlayers} players`,
+            () => this.multiplayer(),
+            2,
+          ),
+          mega('pink', '📅', 'Daily Challenge', 'a new hole every day', () => this.daily(), 3),
+          h(
+            'div',
+            { class: 'mm-tiles' },
+            tile('🎽', 'Locker', () => this.locker(), 4),
+            tile('💎', 'Collection', () => this.collection(), 5),
+            tile('🏅', 'Profile', () => this.profileScreen(), 6),
+            tile('⚙️', 'Settings', () => this.settings(() => this.mainMenu()), 7),
+          ),
         ),
       ),
-      h('div', { class: 'version-tag', title: 'Game version' }, `v${APP_VERSION}`),
-      // Desktop app only: a browser tab can't close itself, and iOS apps don't quit themselves.
-      window.pppNative?.quit
-        ? h(
-            'button',
-            {
-              class: 'btn small quit-desktop',
-              title: 'Close the game',
-              onclick: () => void window.pppNative?.quit?.(),
-            },
-            '⏻ Quit to desktop',
-          )
-        : null,
       h(
         'div',
-        { class: 'footer-hint' },
-        matchMedia('(pointer: coarse)').matches
-          ? 'Drag back from the ball to putt · drag elsewhere to look around · pinch to zoom'
-          : 'Drag back from the ball to putt · Space to charge · right-drag to orbit · T overview',
+        { class: 'menu-foot' },
+        h('div', { class: 'version-tag', title: 'Game version' }, `v${APP_VERSION}`),
+        h(
+          'div',
+          { class: 'footer-hint' },
+          matchMedia('(pointer: coarse)').matches
+            ? 'Drag back from the ball to putt · drag elsewhere to look around · pinch to zoom'
+            : 'Drag back from the ball to putt · Space to charge · right-drag to orbit · T overview',
+        ),
+        // Desktop app only: a browser tab can't close itself, and iOS apps don't quit themselves.
+        window.pppNative?.quit
+          ? h(
+              'button',
+              {
+                class: 'btn small quit-desktop',
+                title: 'Close the game',
+                onclick: () => void window.pppNative?.quit?.(),
+              },
+              '⏻ Quit to desktop',
+            )
+          : null,
       ),
     );
     g.ui.showScreen(el);
+    // After showScreen: it runs the previous screen's leave hooks (see locker()).
+    g.ui.onLeave(() => hero.dispose());
   }
 
-  courseSelect(onPick?: (c: Course) => void, title = 'Choose a course'): void {
+  /** Play Solo: an overworld map of the worlds and their holes. */
+  courseSelect(onPick?: (c: Course) => void, title = 'Choose a world'): void {
+    const g = this.game;
     const p = this.p;
-    const cards = COURSES.map((c) => {
-      const unlocked = worldUnlocked(p, c.world);
-      const stars = p.stars[c.id] ?? [false, false, false];
+    const worlds: WorldInfo[] = COURSES.map((c) => {
       const gate = WORLD_GATES[c.world];
-      const par = c.holes.reduce((a, h) => a + h.par, 0);
-      return h(
-        'button',
-        {
-          class: `course-card ${unlocked ? '' : 'locked'}`,
-          style: `--sky:${c.theme.skyTop};--floor:${c.theme.floorA}`,
-          disabled: !unlocked,
-          onclick: () => (onPick ? onPick(c) : this.game.startLocal(c)),
-        },
-        h('div', { class: 'cc-emoji' }, WORLD_EMOJI[c.world] ?? '⛳'),
-        h('div', { class: 'cc-name' }, c.name),
-        h('div', { class: 'cc-desc' }, c.description),
+      return {
+        course: c,
+        unlocked: worldUnlocked(p, c.world),
+        stars: p.stars[c.id] ?? [false, false, false],
+        emoji: WORLD_EMOJI[c.world] ?? '⛳',
+        gate: `Lv ${gate.level} or ${gate.stars} ★`,
+      };
+    });
+    // Start on the first world still to finish (else the last one you can play).
+    let sel = worlds.findIndex((w) => w.unlocked && !w.stars[0]);
+    if (sel < 0) sel = Math.max(0, worlds.map((w) => w.unlocked).lastIndexOf(true));
+    const card = h('div', { class: 'map-card' });
+    const play = (i: number) => {
+      const w = worlds[i];
+      if (!w.unlocked) {
+        audio.ui('error');
+        const gate = WORLD_GATES[w.course.world];
+        return g.ui.toast(
+          `Reach level ${gate.level} or earn ${gate.stars} ⭐ to unlock ${w.course.name}`,
+          'bad',
+        );
+      }
+      if (onPick) onPick(w.course);
+      else g.startLocal(w.course);
+    };
+    const pick = (i: number) => {
+      if (i < 0 || i >= worlds.length) return;
+      sel = i;
+      map.select(i);
+      renderCard();
+    };
+    const renderCard = () => {
+      const w = worlds[sel];
+      const c = w.course;
+      const par = c.holes.reduce((a, x) => a + x.par, 0);
+      const gate = WORLD_GATES[c.world];
+      clear(card);
+      card.className = `map-card panel ${w.unlocked ? '' : 'locked'}`;
+      card.style.setProperty('--world', c.theme.floorA);
+      card.append(
+        h('div', { class: 'mc-badge' }, w.unlocked ? w.emoji : '🔒'),
         h(
           'div',
-          { class: 'cc-meta' },
-          `${c.holes.length} holes · Par ${par}${p.best[c.id] ? ` · Best ${p.best[c.id]}` : ''}`,
+          { class: 'mc-info' },
+          h('div', { class: 'mc-kicker' }, `World ${sel + 1} of ${worlds.length}`),
+          h('h3', {}, c.name),
+          h('div', { class: 'mc-desc' }, c.description),
+          h(
+            'div',
+            { class: 'mc-meta' },
+            h('span', {}, `${c.holes.length} holes`),
+            h('span', {}, `Par ${par}`),
+            p.best[c.id] ? h('span', {}, `Best ${p.best[c.id]}`) : null,
+          ),
+          w.unlocked
+            ? h(
+                'div',
+                { class: 'mc-stars' },
+                ...['Complete', 'Par or better', 'All gems & golden ball'].map((label, j) =>
+                  h('span', { class: w.stars[j] ? 'on' : '' }, h('i', {}, '★'), label),
+                ),
+              )
+            : h(
+                'div',
+                { class: 'mc-lock' },
+                `🔒 Reach level ${gate.level} or earn ${gate.stars} ⭐ to unlock`,
+              ),
         ),
         h(
           'div',
-          { class: 'cc-stars' },
-          ...stars.map((s, i) =>
+          { class: 'mc-go' },
+          h(
+            'div',
+            { class: 'mc-arrows' },
             h(
-              'span',
-              { class: s ? 'on' : '', title: ['Complete', 'Par or better', 'All gems & golden ball'][i] },
-              '★',
+              'button',
+              {
+                class: 'btn small',
+                'aria-label': 'Previous world',
+                disabled: sel === 0,
+                onclick: () => pick(sel - 1),
+              },
+              '◀',
+            ),
+            h(
+              'button',
+              {
+                class: 'btn small',
+                'aria-label': 'Next world',
+                disabled: sel === worlds.length - 1,
+                onclick: () => pick(sel + 1),
+              },
+              '▶',
             ),
           ),
+          h(
+            'button',
+            { class: 'btn primary big mc-play', disabled: !w.unlocked, onclick: () => play(sel) },
+            w.unlocked ? '▶ Play' : 'Locked',
+          ),
         ),
-        !unlocked ? h('div', { class: 'cc-lock' }, `🔒 Level ${gate.level} or ${gate.stars} ⭐`) : null,
       );
+    };
+    const ball = COSMETIC_BY_ID.get(g.profile.loadout().ball);
+    const map = new WorldMap({
+      worlds,
+      selected: sel,
+      ballColor: ball?.color ?? '#ffffff',
+      onSelect: (i) => {
+        if (i !== sel) audio.ui('hover');
+        pick(i);
+      },
+      onActivate: play,
     });
-    this.game.ui.showScreen(
+    renderCard();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') pick(sel + 1);
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') pick(sel - 1);
+      else return;
+      e.preventDefault();
+      map.reveal();
+    };
+    g.ui.showScreen(
       h(
         'div',
-        { class: 'screen' },
+        { class: 'screen map-screen' },
         this.header(title, () => this.mainMenu()),
-        h('div', { class: 'course-grid' }, ...cards),
+        h('div', { class: 'map-wrap' }, map.el),
+        card,
       ),
     );
+    map.relayout();
+    window.addEventListener('keydown', onKey);
+    g.ui.onLeave(() => {
+      map.dispose();
+      window.removeEventListener('keydown', onKey);
+    });
   }
 
   // ------------------------------------------------------------------------------------------
