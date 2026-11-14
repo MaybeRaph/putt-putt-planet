@@ -28,7 +28,7 @@
 | v1.8.7 smooth hole-intro camera | ✅ done (see below) |
 | v1.8.8 direct links re-establish themselves, silent-host warning, desktop log file | ✅ done (see below) |
 | v1.9.0 funnels, fair wormholes, spectator switching, Chaos in Planet Hopper, harder small-team runs, boss holes must be holed, scenery that fades and stays off the course, faster corkscrews, smooth bumps, hitch-free intro | ✅ done (see below) |
-| v1.10.0 UI visual overhaul: toybox identity for every screen and the HUD, 3D ball, hat and putter on the main menu, world-map Play Solo | ✅ done, not released (see below) |
+| v1.10.0 UI visual overhaul: toybox identity for every screen and the HUD, 3D ball, hat and putter on the main menu, world-map Play Solo | ✅ done (see below) |
 
 **Next steps (not started):** real accounts/auth; persist rooms across server restarts; switch the client to the non-`compat` Rapier build (separate .wasm, ~1 MB smaller download); optional outline pass; hand-tuned pars from playtesting with humans (current pars are designer estimates, sanity-checked by the solver).
 
@@ -73,7 +73,7 @@
 - Bug bash fixes: Esc couldn't resume (controls disabled while paused); solo sim kept running while paused; three r187 shadow-map deprecation.
 - Production: vendor chunk split (app 94 KB gz, three 150 KB, rapier 1.67 MB), inline boot splash for instant first paint, single-process server (static + ws), path-traversal guarded, standalone server bundle verified from an empty dir. Dockerfile written (Docker not installed on the dev machine, so the image build itself is untested).
 
-## v1.10.0 — UI visual overhaul (done, not released yet)
+## v1.10.0 — UI visual overhaul (done)
 
 Goal (Lucas and Raph): the old menus looked generic; make the UI fit the game's cosy, saturated, low-poly look, closer to a chunky party game, with your own ball on the main menu and a map for Play Solo. Presentation only: nothing in `shared/` changed.
 
@@ -84,7 +84,8 @@ Goal (Lucas and Raph): the old menus looked generic; make the UI fit the game's 
 - Version 1.10.0 (root and desktop `package.json`, iOS `MARKETING_VERSION`).
 - Tests: `client/test/v110.test.ts` (map layout in both arrangements: one stone per hole, stones on their island and inside the map, evenly spaced with room to tap, badge, sign and stars clear of the path, islands in play order with each path leaving towards the next island).
 - Checked in the browser at 1280×800 and 375×812: main menu (poke, drag), map (selection, hover tips, locked and finished worlds, Play), Locker, Settings (screen and pause overlay), Collection, Profile, Play with Friends, direct-game lobby, Daily (with the server), Clubhouse, in-game HUD, hole intro, pause, scorecard, results with rewards, Planet Hopper HUD and trinket pick. Console clean.
-- Not verified: the desktop (Electron) and iOS builds (not packaged), real touch hardware (only the browser's phone emulation), the 3D character on a low-end GPU (it is a second, small WebGL context while the menu is open, like the Locker).
+- Released as v1.10.0 with Mac and Windows installers (unsigned, as before); the universal Mac app was launched and boots cleanly (log checked).
+- Not verified: the Windows build on Windows, the iOS build, real touch hardware (only the browser's phone emulation), the 3D character on a low-end GPU (it is a second, small WebGL context while the menu is open, like the Locker).
 
 ## v1.9.0 — funnels, fairer runs, scenery fixes (done)
 - **Wormholes** (`generate.ts` §5): an easy pad (radius 0.36, beside the rail) now only skips ahead to a flat leg about halfway along the course (by distance, never in the last third). The pad that warps to the last leg is the **jackpot**: gold, radius 0.2, hugging the rail, and it only takes a ball rolling slower than 1.6 m/s (`teleporter.maxSpeed`, optional in the schema); faster balls roll over it. 40% of wormholes are jackpots.
