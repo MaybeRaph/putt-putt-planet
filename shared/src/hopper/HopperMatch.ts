@@ -9,6 +9,7 @@ import {
   TRINKETS,
   TRINKET_IDS,
   UPGRADES,
+  UPGRADE_IDS,
   isTrinket,
   type ChoiceOption,
   type HopperState,
@@ -27,6 +28,8 @@ export interface HopperSetup {
   upgrades: Record<string, number>;
   /** Every player's equipped keepsake joins the team's trinkets. */
   keepsakes: (string | null | undefined)[];
+  /** Chaos mode: balls collide with each other. */
+  chaos?: boolean;
 }
 
 /** Trinkets that change the hole itself (baked into the generated geometry/physics). */
@@ -47,11 +50,28 @@ const VOTE_SECONDS = 25;
 export const MAJORITY_SECONDS = 5;
 /** Gimme Clover reach by level (metres from the cup a resting ball drops in for free). */
 export const GIMME_RANGE = [0, 0.9, 1.3, 1.7];
-/** Draft weight by current level: new trinket, level-up to Lv2, level-up to Lv3. */
-const LEVEL_UP_WEIGHT = [1, 0.4, 0.12, 0];
+/**
+ * Draft weight by current level: new trinket, level-up to Lv2, level-up to Lv3. v1.9: level-ups
+ * were 0.4 / 0.12 and turned up too often (in most drafts once a few trinkets are owned); a draft
+ * now also offers at most one level-up while new trinkets are left.
+ */
+const LEVEL_UP_WEIGHT = [1, 0.08, 0.03, 0];
 /** Draft weight of a rare trinket relative to a common one. */
 const RARE_WEIGHT = 0.25;
 const REST_REWARDS: RewardId[] = ['heal', 'dust', 'trinket', 'vitality', 'gamble'];
+/**
+ * Small teams (1–2 players) play by harder heart rules (v1.9; a fully upgraded solo player won
+ * 9 runs out of 9): under par heals at most 1 heart (a hole-in-one still 2), from the second
+ * planet on a hole over par costs one more heart (still at most 3), and a boss heals nothing.
+ */
+export const SMALL_TEAM = 2;
+/** Boss holes give up to par + this many strokes (normal holes: par + 4) before a pick-up. */
+export const BOSS_STROKE_ALLOWANCE = 3;
+/**
+ * Share of all Clubhouse upgrade ranks from which a small team's boss holes count one stroke
+ * harder (a par on a boss costs a heart).
+ */
+export const STRONG_CLUBHOUSE = 0.5;
 
 /** World order for a run: meadow first, space last, two of the others in between. */
 export function runWorlds(seed: number): string[] {
@@ -99,9 +119,10 @@ export class HopperMatch extends Match {
   private shieldUsed = 0;
   private restClaimed = false;
   private pendingEnd: 'won' | 'lost' | null = null;
+  private lostToBoss = false;
 
   constructor(setup: HopperSetup) {
-    super({ mode: 'hopper', holes: [], players: setup.players, holeEndDelay: 3.5 });
+    super({ mode: 'hopper', holes: [], players: setup.players, holeEndDelay: 3.5, chaos: !!setup.chaos });
     this.seed = setup.seed;
     this.worlds = runWorlds(setup.seed);
     this.upgrades = setup.upgrades;
@@ -127,6 +148,12 @@ export class HopperMatch extends Match {
     const first = this.makeSpec(0, null, 'dust', 0);
     this.hs.stages.push(first);
     this.cfg.holes.push(stageHole(this.seed, 0, first));
+  }
+
+  /** Share (0–1) of every Clubhouse upgrade rank the run started with. */
+  clubhousePower(): number {
+    const total = UPGRADE_IDS.reduce((a, id) => a + UPGRADES[id].costs.length, 0);
+    return UPGRADE_IDS.reduce((a, id) => a + this.rank(id), 0) / total;
   }
 
   private rank(id: UpgradeId): number {
@@ -194,7 +221,12 @@ export class HopperMatch extends Match {
   override strokeLimit(): number {
     const par = this.hole.par;
     if (this.spec.kind === 'rest') return par + 8;
-    const base = this.spec.omen === 'fuse' ? [2, 3, 4, 4][this.lv('compass')] : 4;
+    const base =
+      this.spec.omen === 'fuse'
+        ? [2, 3, 4, 4][this.lv('compass')]
+        : this.spec.kind === 'boss'
+          ? BOSS_STROKE_ALLOWANCE
+          : 4;
     const overtime = [0, 3, 5, 7][this.lv('overtime')];
     const moth = [0, 0, 2, 4][this.lv('moth')];
     return par + base + overtime + moth;
@@ -329,6 +361,12 @@ export class HopperMatch extends Match {
     } else {
       const by: Record<string, number> = {};
       let net = 0;
+      const small = this.players.length <= SMALL_TEAM;
+      const boss = spec.kind === 'boss';
+      // A small, fully kitted team needs to beat a boss's par to stay level.
+      const bossPar = boss && small && this.clubhousePower() >= STRONG_CLUBHOUSE ? 1 : 0;
+      let cleared = false;
+      let counted = false;
       for (const e of this.entrants) {
         const res = this.results[e][this.holeIndex];
         const connected = this.players.find((p) => p.id === e)?.connected ?? true;
@@ -336,11 +374,14 @@ export class HopperMatch extends Match {
           by[e] = 0;
           continue;
         }
+        counted = true;
+        if (!res.pickedUp) cleared = true;
         let d = res.pickedUp
           ? -[3, 2, 2, 1][this.lv('overtime')]
           : res.holeInOne
             ? 2
-            : Math.max(-3, Math.min(2, res.par - res.strokes));
+            : Math.max(-3, Math.min(small ? 1 : 2, res.par - bossPar - res.strokes));
+        if (small && !res.pickedUp && d < 0 && spec.sector >= 1) d = Math.max(-3, d - 1);
         if (d > 0) d += this.lv('feeder');
         by[e] = d;
         net += d;
@@ -354,12 +395,19 @@ export class HopperMatch extends Match {
       this.hs.hearts = Math.min(this.hs.maxHearts, this.hs.hearts + net);
       this.hs.lastDelta = { by, net };
       if (spec.reward) this.grant(spec.reward);
-      if (spec.kind === 'boss') {
+      if (boss && counted && !cleared) {
+        // Nobody holed the boss: the run ends here, whatever hearts are left.
+        this.lostToBoss = true;
+        this.pendingEnd = 'lost';
+      } else if (boss) {
         this.hs.dust += 15;
-        this.heal(1);
-        this.note('☠️ Boss cleared! +15 stardust, +1 ❤️', 'epic');
+        if (small) this.note('☠️ Boss cleared! +15 stardust', 'epic');
+        else {
+          this.heal(1);
+          this.note('☠️ Boss cleared! +15 stardust, +1 ❤️', 'epic');
+        }
       }
-      if (this.hs.hearts <= 0) {
+      if (!this.pendingEnd && this.hs.hearts <= 0) {
         if (this.hs.secondWind) {
           this.hs.secondWind = false;
           const back = secondWindHearts(this.players.length);
@@ -397,7 +445,11 @@ export class HopperMatch extends Match {
       this.hs.result = this.pendingEnd;
       this.phase = 'courseEnd';
       this.note(
-        this.pendingEnd === 'won' ? '🏆 You conquered every planet!' : '💔 Out of hearts…',
+        this.pendingEnd === 'won'
+          ? '🏆 You conquered every planet!'
+          : this.lostToBoss
+            ? '☠️ The boss beat you: nobody holed out'
+            : '💔 Out of hearts…',
         this.pendingEnd === 'won' ? 'epic' : 'bad',
       );
       this.events.push({ type: 'courseComplete' });
@@ -494,13 +546,25 @@ export class HopperMatch extends Match {
     const pool = TRINKET_IDS.filter((t) => this.lv(t) < MAX_TRINKET_LEVEL);
     const n = Math.min(pool.length, 3 + (this.rank('wide') > 0 ? 1 : 0));
     const out: ChoiceOption[] = [];
-    while (out.length < n) {
+    let levelUps = 0;
+    while (out.length < n && pool.length) {
       // Rares turn up a quarter as often; each level is rarer than the last (Lv2 uncommon, Lv3 rare).
-      const weights = pool.map((t) => (TRINKETS[t].rare ? RARE_WEIGHT : 1) * LEVEL_UP_WEIGHT[this.lv(t)]);
+      // At most one level-up per draft while new trinkets are left to offer.
+      const onlyNew = levelUps > 0 && pool.some((t) => this.lv(t) === 0);
+      const weights = pool.map(
+        (t) =>
+          (onlyNew && this.lv(t) > 0 ? 0 : 1) * (TRINKETS[t].rare ? RARE_WEIGHT : 1) * LEVEL_UP_WEIGHT[this.lv(t)],
+      );
       let x = r() * weights.reduce((a, b) => a + b, 0);
-      let k = 0;
-      while ((x -= weights[k]) > 0) k++;
-      const t = pool.splice(Math.min(k, pool.length - 1), 1)[0];
+      let k = -1;
+      for (let j = 0; j < pool.length; j++) {
+        if (weights[j] <= 0) continue;
+        k = j;
+        if ((x -= weights[j]) <= 0) break;
+      }
+      if (k < 0) break;
+      const t = pool.splice(k, 1)[0];
+      if (this.lv(t) > 0) levelUps++;
       out.push({ trinket: t, level: this.lv(t) + 1 });
     }
     return out;

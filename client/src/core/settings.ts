@@ -14,6 +14,7 @@ export type Action =
   | 'emote'
   | 'chat'
   | 'scoreboard'
+  | 'spectate'
   | 'debug';
 
 export const ACTION_LABELS: Record<Action, string> = {
@@ -29,6 +30,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   emote: 'Emote wheel',
   chat: 'Chat',
   scoreboard: 'Scoreboard',
+  spectate: 'Switch who you watch',
   debug: 'Debug overlay',
 };
 
@@ -66,6 +68,7 @@ export const DEFAULT_KEYS: Record<Action, string> = {
   emote: 'KeyG',
   chat: 'Enter',
   scoreboard: 'Tab',
+  spectate: 'KeyF',
   debug: 'Backquote',
 };
 

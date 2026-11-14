@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { hashString, rng, range, pick, type Decor, type Theme } from '@ppp/shared';
 import { flat } from './materials';
 import { natureActive, naturePartsFor } from './nature';
+import { enableSceneryFade, fadeBaseAttribute } from './fade';
 
 /**
  * Procedural low-poly decor. Each kind is a list of parts (shared geometry + material + local
@@ -284,6 +285,39 @@ const KIT_SCATTER: Record<Kit, { near: string[]; far: string[]; backdrop: string
 
 const TALL = new Set(['tree', 'pine', 'snowpine', 'deadtree', 'lollipop', 'chimney', 'pipe', 'antenna']);
 
+/**
+ * Rough ground radius of each kind at scale 1 (m): props keep this far apart (trunks and rocks
+ * never grow into each other) and authored props are kept this far off the course.
+ */
+const FOOT_R: Record<string, number> = {
+  tree: 1.4,
+  pine: 1.7,
+  snowpine: 1.5,
+  deadtree: 1.5,
+  bush: 0.7,
+  rock: 0.75,
+  spacerock: 0.75,
+  lollipop: 0.75,
+  gumdrop: 0.5,
+  candycane: 0.45,
+  donut: 0.85,
+  crystal: 0.5,
+  snowman: 0.45,
+  iceblock: 0.5,
+  gear: 1.0,
+  pipe: 0.4,
+  chimney: 0.6,
+  crate: 0.5,
+  antenna: 0.5,
+  alienplant: 0.3,
+  fern: 0.45,
+  flower: 0.2,
+  mushroom: 0.2,
+  pebble: 0.2,
+};
+const SMALL = new Set(['flower', 'mushroom', 'fern', 'pebble', 'alienplant']);
+const footR = (kind: string, scale: number) => (FOOT_R[kind] ?? 0.5) * scale;
+
 /** Scatter lists when the stylised models are in use (the procedural props stay for flavour). */
 const KIT_SCATTER_MODELS: Record<Kit, { near: string[]; far: string[]; fill: string[] }> = {
   meadow: {
@@ -334,18 +368,52 @@ export function buildDecor(
   groundY: number,
   density = 1,
   heightAt: (x: number, z: number) => number = () => groundY,
+  /** Solid course only (floors, rails, blocks; not ponds): what a prop must never poke into. */
+  onCourse: (x: number, z: number, margin: number) => boolean = () => false,
 ): THREE.Group {
   const r = rng(hashString(holeId + kit));
   /** `far`: beyond the shadow map round the course, so it needn't render into it. */
   const placements: { kind: string; pos: THREE.Vector3; scale: number; rotY: number; color?: string; far?: boolean }[] = [];
-  for (const d of authored)
+  /** Ground taken by big props so far (small ones may tuck in between). */
+  const taken: { x: number; z: number; r: number }[] = [];
+  const crowded = (x: number, z: number, rad: number, small: boolean) =>
+    taken.some((t) => Math.hypot(t.x - x, t.z - z) < (t.r + rad) * (small ? 0.45 : 0.9));
+  for (const d of authored) {
+    let x = d.pos[0],
+      z = d.pos[2];
+    const ground = heightAt(x, z);
+    const rad = footR(d.kind, d.scale);
+    let y = ground;
+    if (onCourse(x, z, 0) && d.pos[1] > ground + 0.6) {
+      // Standing on top of the course (a rock on a corkscrew's tower): keep its height.
+      y = d.pos[1];
+    } else if (onCourse(x, z, rad * 0.85)) {
+      // Would poke through a rail or green: slide it out to the nearest clear spot, else drop it.
+      let best: [number, number] | null = null;
+      for (let step = 0.3; step <= 2.7 && !best; step += 0.3)
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * Math.PI * 2;
+          const nx = x + Math.cos(a) * step,
+            nz = z + Math.sin(a) * step;
+          if (!onCourse(nx, nz, rad * 0.85)) {
+            best = [nx, nz];
+            break;
+          }
+        }
+      if (!best) continue;
+      [x, z] = best;
+      y = heightAt(x, z);
+    }
+    if (!SMALL.has(d.kind) && y === ground && crowded(x, z, rad, false)) continue;
     placements.push({
       kind: d.kind,
-      pos: new THREE.Vector3(d.pos[0], heightAt(d.pos[0], d.pos[2]), d.pos[2]),
+      pos: new THREE.Vector3(x, y, z),
       scale: d.scale,
       rotY: d.rotY,
       color: d.color,
     });
+    if (!SMALL.has(d.kind)) taken.push({ x, z, r: rad });
+  }
 
   const blocked = keepOut;
   const cx = (bounds.min.x + bounds.max.x) / 2,
@@ -365,14 +433,18 @@ export function buildDecor(
     // low plants and rocks, and let the trees start a few metres out.
     if (models && ring < 3.2 && TALL.has(kind)) kind = pick(r, KIT_SCATTER_MODELS[kit].fill);
     const isSmall = kind === 'flower' || kind === 'mushroom' || kind === 'fern' || kind === 'pebble';
-    if (blocked(x, z, isSmall ? 0.5 : 1.6)) continue;
+    const scale = range(r, 0.8, 1.4) * (ring > 6 ? 1.25 + ring / 40 : 1);
+    const rad = footR(kind, scale);
+    if (blocked(x, z, isSmall ? 0.5 : Math.max(1.6, rad + 0.3))) continue;
+    if (crowded(x, z, rad, isSmall)) continue;
     placements.push({
       kind,
       pos: new THREE.Vector3(x, heightAt(x, z) - 0.05, z),
-      scale: range(r, 0.8, 1.4) * (ring > 6 ? 1.25 + ring / 40 : 1),
+      scale,
       rotY: r() * 6.28,
       far: ring > 7,
     });
+    if (!isSmall) taken.push({ x, z, r: rad });
     i++;
   }
   // Inner fill: small items close to the course for a lush look.
@@ -381,12 +453,18 @@ export function buildDecor(
     const x = range(r, bounds.min.x - 2, bounds.max.x + 2);
     const z = range(r, bounds.min.z - 2, bounds.max.z + 2);
     if (blocked(x, z, 0.6)) continue;
+    const kind = pick(r, fillers);
+    const scale = range(r, 0.5, 0.9);
+    const small = SMALL.has(kind);
+    if (!small && blocked(x, z, footR(kind, scale) + 0.2)) continue;
+    if (crowded(x, z, footR(kind, scale), small)) continue;
     placements.push({
-      kind: pick(r, fillers),
+      kind,
       pos: new THREE.Vector3(x, heightAt(x, z) - 0.02, z),
-      scale: range(r, 0.5, 0.9),
+      scale,
       rotY: r() * 6.28,
     });
+    if (!small) taken.push({ x, z, r: footR(kind, scale) });
     i++;
   }
   // Backdrop: planets in the space sky (other worlds get real terrain mountains instead).
@@ -411,7 +489,7 @@ export function buildDecor(
   // Batch into instanced meshes keyed by geometry+material.
   const batches = new Map<
     string,
-    { geo: THREE.BufferGeometry; mat: THREE.Material; mats: THREE.Matrix4[]; far: boolean }
+    { geo: THREE.BufferGeometry; mat: THREE.Material; mats: THREE.Matrix4[]; bases: THREE.Vector3[]; far: boolean }
   >();
   const base = new THREE.Matrix4();
   for (const p of placements) {
@@ -424,14 +502,24 @@ export function buildDecor(
       const far = !!p.far || p.kind === 'planet';
       const key = part.geo.uuid + part.mat.uuid + (far ? 'f' : 'n');
       let b = batches.get(key);
-      if (!b) batches.set(key, (b = { geo: part.geo, mat: part.mat, mats: [], far }));
+      if (!b) batches.set(key, (b = { geo: part.geo, mat: part.mat, mats: [], bases: [], far }));
       b.mats.push(base.clone().multiply(part.m));
+      b.bases.push(p.pos);
     }
   }
   const group = new THREE.Group();
   group.name = 'decor';
   for (const b of batches.values()) {
-    const im = new THREE.InstancedMesh(b.geo, b.mat, b.mats.length);
+    enableSceneryFade(b.mat);
+    // A per-batch geometry sharing the cached shape's buffers, plus this batch's fade bases.
+    const geo = new THREE.BufferGeometry();
+    geo.setIndex(b.geo.index);
+    for (const [k, v] of Object.entries(b.geo.attributes)) geo.setAttribute(k, v);
+    geo.boundingSphere = b.geo.boundingSphere;
+    geo.boundingBox = b.geo.boundingBox;
+    geo.setAttribute('aFadeBase', fadeBaseAttribute(b.bases));
+    geo.userData.wrapper = true;
+    const im = new THREE.InstancedMesh(geo, b.mat, b.mats.length);
     b.mats.forEach((m, i) => im.setMatrixAt(i, m));
     // The sun's shadow map only covers the course and a few metres round it.
     im.castShadow = !b.far;

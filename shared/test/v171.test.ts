@@ -7,8 +7,7 @@ import {
   PHYSICS,
   SKELETON,
   Simulation,
-  domeCapPoints,
-  domeSphere,
+  domeGrid,
   initPhysics,
   stageHole,
   MAJORITY_SECONDS,
@@ -42,6 +41,8 @@ describe('v1.7.1 ledges are solid where they are drawn', () => {
           b = h.path[k + 1];
         const dxz = Math.hypot(b[0] - a[0], b[2] - a[2]);
         if (!(b[1] - a[1] < -0.3 && dxz < 1.2)) continue; // a drop: 0.9 m along, 0.7-1.1 m down
+        // (A funnel's drop is meant to be rolled back under: its lower green runs under the basin.)
+        if (h.solids.some((s) => s.shape === 'funnel' && Math.hypot(s.center[0] - a[0], s.center[2] - a[2]) < 0.1)) continue;
         drops++;
         const ux = (b[0] - a[0]) / dxz,
           uz = (b[2] - a[2]) / dxz;
@@ -103,13 +104,11 @@ describe('v1.7.1 ledges are solid where they are drawn', () => {
 });
 
 describe('v1.7.1 bumps collide exactly where they are drawn', () => {
-  it('the hull is the visible cap: same height at the top, nothing past the rim or below the green', () => {
+  it('the collider is the drawn bell: same height at the top, nothing past the rim or below the green', () => {
     const d = dome(0, 0, 0, 1.24, 0.12);
-    const pts = domeCapPoints(d.center, d.size);
-    const { r } = domeSphere(d.center, d.size);
-    expect(r).toBeGreaterThan(1.5); // the sphere the cap is cut from is far bigger than the cap
+    const pts = domeGrid(d.center, d.size);
     expect(Math.max(...pts.map((p) => p[1]))).toBeCloseTo(0.12, 6);
-    expect(Math.min(...pts.map((p) => p[1]))).toBeCloseTo(0, 6);
+    expect(Math.min(...pts.map((p) => p[1]))).toBeGreaterThan(-0.005);
     expect(Math.max(...pts.map((p) => Math.hypot(p[0], p[2])))).toBeCloseTo(0.62, 6);
   });
 

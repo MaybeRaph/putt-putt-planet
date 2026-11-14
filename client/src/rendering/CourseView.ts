@@ -8,7 +8,11 @@ import {
   kinematicParts,
   obstaclePose,
   obstacleSolids,
-  domeSphere,
+  domeGrid,
+  domeGridIndex,
+  funnelGrid,
+  funnelGridIndex,
+  funnelHeightAt,
   solidRibbon,
   windmillVisual,
   type Collectible,
@@ -21,6 +25,7 @@ import {
 } from '@ppp/shared';
 import { canvasTexture, checkerMaterial, darken, mottleTexture, toon, woodTexture } from './materials';
 import { buildDecor } from './decor';
+import { setSceneryFade } from './fade';
 import { buildWater } from './water';
 import { Footprint } from './footprint';
 import { Landscape } from './Landscape';
@@ -92,6 +97,7 @@ export class CourseView {
     // Exact footprint of the course (floors, rails, blocks, ponds): grass and scenery grow right
     // up to it, but never through it.
     const foot = new Footprint(all, hole.zones, b.min, b.max);
+    const solidFoot = this.courseCover;
     // Keep the camera's usual spot behind the tee clear of trees.
     const t0 = hole.tee,
       t1 = hole.path[1] ?? hole.cup;
@@ -101,7 +107,8 @@ export class CourseView {
     const nearCourse = (x: number, z: number, margin: number) => foot.near(x, z, margin);
     const keepOut = (x: number, z: number, margin: number) =>
       foot.near(x, z, margin) || (Math.abs(x - bx) < 3 + margin && Math.abs(z - bz) < 3 + margin);
-    this.scenery = { nearCourse, keepOut };
+    const onCourse = (x: number, z: number, margin: number) => solidFoot.near(x, z, margin);
+    this.scenery = { nearCourse, keepOut, onCourse };
     this.buildScenery(opts.decorDensity ?? 1, opts.grass ?? 40000);
   }
 
@@ -109,6 +116,7 @@ export class CourseView {
   private readonly scenery: {
     nearCourse: (x: number, z: number, margin: number) => boolean;
     keepOut: (x: number, z: number, margin: number) => boolean;
+    onCourse: (x: number, z: number, margin: number) => boolean;
   };
   private decor: THREE.Group | null = null;
 
@@ -142,6 +150,7 @@ export class CourseView {
       this.groundY,
       decorDensity,
       this.landscape.heightAt,
+      this.scenery.onCourse,
     );
     this.root.add(this.decor);
   }
@@ -151,7 +160,12 @@ export class CourseView {
     this.landscape = null;
     if (this.decor) {
       this.decor.removeFromParent();
-      this.decor.children.forEach((c) => (c as THREE.InstancedMesh).dispose());
+      this.decor.children.forEach((c) => {
+        const im = c as THREE.InstancedMesh;
+        im.dispose();
+        // Per-batch wrappers only (the shapes they share are cached for the next hole).
+        if (im.geometry.userData.wrapper) im.geometry.dispose();
+      });
       this.decor = null;
     }
   }
@@ -263,6 +277,10 @@ export class CourseView {
       this.addDome(s);
       return;
     }
+    if (s.shape === 'funnel') {
+      this.addFunnel(s);
+      return;
+    }
     let mesh: THREE.Mesh;
     const t = this.theme;
     if (s.role === 'floor') {
@@ -336,16 +354,97 @@ export class CourseView {
     this.root.add(mesh);
   }
 
-  /** A low mound in the green: a shallow spherical cap with the green's checker running over it. */
+  /**
+   * A low mound in the green: a smooth bell that rises out of the floor with no rim, with the
+   * green's world-space checker running over it and analytic normals for soft shading. It casts
+   * no shadow of its own (a dark blob made it read as a hole).
+   */
   private addDome(s: Solid): void {
-    const { c, r } = domeSphere(s.center, s.size);
-    const theta = Math.acos(Math.max(-1, Math.min(1, (r - s.size[1]) / r)));
-    const geo = this.own(new THREE.SphereGeometry(r, 40, 10, 0, Math.PI * 2, 0, theta));
+    const around = 48,
+      rings = 16;
+    const pts = domeGrid(s.center, s.size, around, rings);
+    const a = s.size[0] / 2,
+      h = Math.max(0.01, s.size[1]);
+    const pos = new Float32Array(pts.length * 3);
+    const nrm = new Float32Array(pts.length * 3);
+    pts.forEach((p, i) => {
+      pos.set(p, i * 3);
+      const dx = p[0] - s.center[0],
+        dz = p[2] - s.center[2];
+      const rho = Math.hypot(dx, dz);
+      const slope = rho > 1e-6 && rho < a ? ((h * Math.PI) / (2 * a)) * Math.sin((Math.PI * rho) / a) : 0;
+      const n = new THREE.Vector3(rho > 1e-6 ? (slope * dx) / rho : 0, 1, rho > 1e-6 ? (slope * dz) / rho : 0).normalize();
+      nrm.set([n.x, n.y, n.z], i * 3);
+    });
+    const geo = this.own(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(pts.length * 2), 2));
+    geo.setIndex(domeGridIndex(around, rings));
     const mesh = new THREE.Mesh(geo, this.floorTopMaterial(s));
-    mesh.position.set(c[0], c[1], c[2]);
+    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    this.root.add(mesh);
+  }
+
+  /**
+   * A funnel basin: its top (the green's checker, smooth normals) and a dark shell underneath,
+   * 0.18 m thick, whose inner lip lines the hole. Seen from the green below it reads as a solid
+   * bowl hanging over the course. It can fade like a raised terrace when it hides a ball.
+   */
+  private addFunnel(s: Solid): void {
+    const around = 48,
+      rings = 18;
+    const top = funnelGrid(s.center, s.size, around, rings);
+    const idx = funnelGridIndex(around, rings);
+    const th = 0.18;
+    const pos: number[] = [];
+    for (const p of top) pos.push(p[0], p[1], p[2]);
+    for (const p of top) pos.push(p[0], p[1] - th, p[2]);
+    const n = top.length;
+    const index: number[] = [...idx];
+    const shell: number[] = [];
+    // Underside: the same grid shifted down, facing down.
+    for (let k = 0; k < idx.length; k += 3) shell.push(idx[k] + n, idx[k + 2] + n, idx[k + 1] + n);
+    // Hole lip (ring 0) and outer edge (last ring): quads joining top and underside.
+    for (const ring of [0, rings])
+      for (let j = 0; j < around; j++) {
+        const a = ring * around + j,
+          b = ring * around + ((j + 1) % around);
+        if (ring === 0) shell.push(a, a + n, b, b, a + n, b + n);
+        else shell.push(a, b, a + n, b, b + n, a + n);
+      }
+    const geo = this.own(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const uvs: number[] = [];
+    for (let i = 0; i < pos.length; i += 3) uvs.push(pos[i] / 3, pos[i + 2] / 3);
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex([...index, ...shell]);
+    geo.addGroup(0, index.length, 0);
+    geo.addGroup(index.length, shell.length, 1);
+    geo.computeVertexNormals();
+    // Analytic normals on the top (smooth across the collar and the well).
+    const nrm = geo.attributes.normal as THREE.BufferAttribute;
+    const R = s.size[0] / 2;
+    for (let i = 0; i < n; i++) {
+      const dx = pos[i * 3] - s.center[0],
+        dz = pos[i * 3 + 2] - s.center[2];
+      const rho = Math.hypot(dx, dz);
+      const e = 0.01;
+      const slope = (funnelHeightAt(s.size, Math.min(R, rho + e)) - funnelHeightAt(s.size, Math.max(0, rho - e))) / (2 * e);
+      const v = new THREE.Vector3((-slope * dx) / (rho || 1), 1, (-slope * dz) / (rho || 1)).normalize();
+      nrm.setXYZ(i, v.x, v.y, v.z);
+    }
+    this.ribbonSideMat ??= this.own(
+      Object.assign(toon(darken(this.theme.ground, 0.62)).clone(), { side: THREE.DoubleSide }),
+    );
+    const mesh = new THREE.Mesh(geo, [this.floorTopMaterial(s), this.ribbonSideMat]);
     mesh.receiveShadow = true;
     mesh.castShadow = true;
-    this.root.add(mesh);
+    const grp = new THREE.Group();
+    grp.add(mesh);
+    this.root.add(grp);
+    this.occluders.push(mesh);
   }
 
   /** Wood-plank rail material tinted with the world's wall colour (one per hole, shared by every rail). */
@@ -685,7 +784,7 @@ export class CourseView {
       theme: this.theme,
       groundY: this.groundY,
       bankMat: this.skirtMaterial(),
-      blocked: (x, z) => this.courseCover.near(x, z, 0.12),
+      blocked: (x, z, margin = 0.12) => this.courseCover.near(x, z, margin),
     });
     this.owned.push(...w.owned);
     this.waterMats.push(...w.animated);
@@ -1001,8 +1100,9 @@ export class CourseView {
         break;
       }
       case 'teleporter': {
+        // A gold entry pad is the jackpot kind: it warps a slow ball to the green.
         for (const [p, col] of [
-          [o.a, '#7c4dff'],
+          [o.a, o.maxSpeed !== undefined ? '#ffb300' : '#7c4dff'],
           [o.b, '#00e5ff'],
         ] as const) {
           const g = new THREE.Group();
@@ -1233,6 +1333,7 @@ export class CourseView {
    * camera), so the ball and the line of the shot always stay visible. They come back when clear.
    */
   updateOcclusion(cam: THREE.Vector3, ball: THREE.Vector3, dt: number): void {
+    setSceneryFade(ball);
     for (const f of this.faded.values()) f.hit = false;
     const from = ball.clone().add(new THREE.Vector3(0, 0.12, 0));
     for (const lift of [0, 0.35]) {
@@ -1371,7 +1472,7 @@ export class CourseView {
     void mat;
     const all = [...this.hole.solids, ...this.hole.obstacles.flatMap((o) => obstacleSolids(o))];
     for (const s of all) {
-      if (s.shape === 'ribbon' || s.shape === 'dome') continue;
+      if (s.shape === 'ribbon' || s.shape === 'dome' || s.shape === 'funnel') continue;
       const geo =
         s.shape === 'box'
           ? new THREE.BoxGeometry(...s.size)
@@ -1395,6 +1496,7 @@ export class CourseView {
   }
 
   dispose(): void {
+    setSceneryFade(null);
     this.toggleColliderDebug(false);
     this.root.removeFromParent();
     this.disposeScenery();

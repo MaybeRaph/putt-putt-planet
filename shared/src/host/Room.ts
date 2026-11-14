@@ -331,6 +331,7 @@ export class Room {
         players,
         upgrades: host?.hopper.upgrades ?? {},
         keepsakes: [...this.members.values()].map((m) => m.conn?.profile?.hopper.keepsake),
+        chaos: this.chaos,
       });
       this.match = match;
       this.course = hopperCourse(match.seed, match.cfg.holes);

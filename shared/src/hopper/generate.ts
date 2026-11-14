@@ -11,6 +11,7 @@ import {
   type Zone,
 } from '../schema';
 import { COURSES } from '../courses/index';
+import { funnelHeightAt } from '../math';
 import {
   FLOOR_T,
   WALL_H,
@@ -28,7 +29,9 @@ import {
   wall,
   zone,
   dome,
+  funnel,
   riser,
+  ringWall,
 } from '../courses/builder';
 import { hashString, pick, range, rng } from '../rng';
 import { MAX_DEPTH, countLevel, type OmenId, type RewardId, type StageSpec, type TrinketId } from './defs';
@@ -163,7 +166,8 @@ type Special =
   | 'leap'
   | 'loop'
   | 'island'
-  | 'camber';
+  | 'camber'
+  | 'funnel';
 /** What each polyline segment is (features only go on plain 'flat' stretches). */
 type SegTag =
   | 'flat'
@@ -184,7 +188,9 @@ type SegTag =
   | 'loop'
   | 'island'
   | 'camber'
-  | 'green';
+  | 'green'
+  | 'funnel'
+  | 'funnelDrop';
 type Feature =
   | 'sand'
   | 'bumpers'
@@ -270,7 +276,14 @@ const SPECIAL_LEN: Record<Exclude<Special, 'fork' | 'spiral'>, number> = {
   loop: 10.5,
   island: 10.5,
   camber: 8,
+  funnel: 10.5,
 };
+/** Funnel basin radius for a fairway of width `w` (it bulges out either side of the green). */
+const funnelR = (w: number) => w / 2 + 0.95;
+/** Funnel depth (rim to hole) and hole radius. */
+const FUNNEL_DEPTH = 0.6;
+const FUNNEL_HOLE = 0.3;
+
 /** Par difficulty points per special. */
 const SPECIAL_DIFF: Record<Special, number> = {
   ramp: 0.3,
@@ -290,13 +303,14 @@ const SPECIAL_DIFF: Record<Special, number> = {
   loop: 1.2,
   island: 1.1,
   camber: 0.5,
+  funnel: 0.4,
 };
 /** Segments whose floor is one smooth ribbon. */
 const SMOOTH: SegTag[] = ['arc', 'spiral', 'slide', 'ramp'];
 /** Specials that may turn up more than once on a hole. */
 const REPEATABLE: Special[] = ['ramp', 'climb', 'hump', 'stream', 'drop', 'slide', 'camber'];
 /** Specials that change the height of the course. */
-const ELEVATION: Special[] = ['ramp', 'climb', 'spiral', 'slide', 'drop', 'leap'];
+const ELEVATION: Special[] = ['ramp', 'climb', 'spiral', 'slide', 'drop', 'leap', 'funnel'];
 
 /** Whole-hole personalities, so neighbouring holes feel different. */
 export type Archetype =
@@ -422,7 +436,7 @@ const ARCH: Record<Archetype, ArchStyle> = {
     width: 0.1,
     specialChance: 0.4,
     maxSpecials: 1,
-    specials: { loop: 2.5, spiral: 2.5, slide: 1.5 },
+    specials: { loop: 2.5, spiral: 2.5, slide: 1.5, funnel: 2 },
     featureChance: -0.2,
     round: 0.2,
     nouns: ['Funhouse', 'Twister', 'Corkscrew', 'Tubes'],
@@ -432,7 +446,7 @@ const ARCH: Record<Archetype, ArchStyle> = {
     len: [6, 9],
     specialChance: 0.4,
     maxSpecials: 1,
-    specials: { drop: 2.5, leap: 2, jump: 1, climb: 1 },
+    specials: { drop: 2.5, leap: 2, jump: 1, climb: 1, funnel: 1.5 },
     featureChance: -0.15,
     round: 0.1,
     nouns: ['Skyway', 'Ledges', 'Cascade', 'Tiers'],
@@ -456,7 +470,7 @@ const ARCH: Record<Archetype, ArchStyle> = {
     width: 0.1,
     specialChance: 0.5,
     maxSpecials: 2,
-    specials: { spiral: 3, slide: 3, drop: 1.2, loop: 1.2, leap: 1 },
+    specials: { spiral: 3, slide: 3, drop: 1.2, loop: 1.2, leap: 1, funnel: 1.5 },
     featureChance: -0.1,
     round: 0.25,
     nouns: ['Rollercoaster', 'Free Fall', 'Big Dipper', 'Thrill Ride'],
@@ -629,6 +643,8 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     addW('spiral', 0.7);
   }
   if (depth >= 2) addW('loop', 0.8);
+  // Funnels: the ball spins round a basin and drops through its middle to the green below.
+  if (depth >= 2) addW('funnel', 0.8);
   // Sloping greens that make putts break.
   if (depth >= 1) addW('camber', 0.9);
   if (depth >= 3) addW('leap', 0.8);
@@ -721,6 +737,8 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
                   : -range(r, 1.2, 1.7 + 0.4 * t)
                 : special === 'drop'
                   ? -range(r, 0.7, 1.1)
+                  : special === 'funnel'
+                    ? -range(r, 1.85, 2.15)
                   : special === 'leap'
                     ? spring
                       ? range(r, 0.8, 1.1)
@@ -730,7 +748,9 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       const quarter = diag ? Math.PI / 4 : Math.PI / 2;
       const turns = i === 0 || fork ? [0] : r() < 0.5 ? [quarter, -quarter, 0] : [-quarter, quarter, 0];
       const half =
-        special === 'island'
+        special === 'funnel'
+          ? funnelR(W) + WALL_T
+          : special === 'island'
           ? islandW / 2 + 2.8
           : special === 'lake'
           ? lakeW / 2
@@ -1069,6 +1089,52 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         }
         difficulty += SPECIAL_DIFF.slide;
         tips.push('A twisting slide: it picks up speed on the way down.');
+        break;
+      }
+      case 'funnel': {
+        // A round basin the ball spins and bounces round before it drops through the hole in
+        // its middle onto a green below, under the basin, and rolls on out from under it.
+        const R = funnelR(W);
+        const y1 = E[1];
+        const a = Math.max(2.0, W / 2 + 0.6);
+        const dc = a + R;
+        // The green ends where its rails meet the basin's ring of rail.
+        const c0 = R - Math.sqrt((R + WALL_T / 2) ** 2 - (W / 2 + WALL_T / 2) ** 2);
+        const C = at(dc, y0);
+        // The green underneath slopes gently forward, so a ball that drops onto it rolls on out
+        // from under the basin into the open (where the camera can see it) and keeps going.
+        const out = dc + R + 0.4;
+        const lift = 0.55;
+        push(at(a + c0, y0), 'landing');
+        push(at(dc, y0 - FUNNEL_DEPTH), 'funnel');
+        push(at(out, y1), 'funnelDrop');
+        push(E, 'landing');
+        extraSolids.push(funnel(C[0], C[2], y0, R, FUNNEL_DEPTH, FUNNEL_HOLE));
+        extraSolids.push(...ringWall(C[0], C[2], y0, R, L.ang + Math.PI, W + WALL_T));
+        // Flaps across the mouth: in only, so a ball that crosses the hole too fast and swings
+        // back can't roll out the way it came; it stays in the basin until it drops.
+        const mouth = at(a + c0 - 0.3, y0);
+        zones.push(zone('oneWay', mouth[0], mouth[2], 0.4, W, y0, { dir: L.ang, ...rot }));
+        // It is closed behind (so a ball can't roll back in under the green above) and open
+        // ahead where it joins the rest of the leg.
+        extraSolids.push(
+          ...fairway([at(a + c0 + 0.1, y1 + lift), at(out, y1)], { width: W, openEnd: true, endPad: 0 }),
+        );
+        for (let k = 0; k < 3; k++) {
+          const th = L.ang + Math.PI / 2 + (k * Math.PI * 2) / 3;
+          const rr = 1.15;
+          collectibles.push(
+            item(
+              holeId,
+              'coin',
+              C[0] + Math.cos(th) * rr,
+              y0 + funnelHeightAt([R * 2, FUNNEL_DEPTH, FUNNEL_HOLE * 2], rr) + 0.2,
+              C[2] + Math.sin(th) * rr,
+            ),
+          );
+        }
+        difficulty += SPECIAL_DIFF.funnel;
+        tips.push('Funnel! Roll it into the basin: it spins round and drops through to the green below.');
         break;
       }
       case 'drop': {
@@ -1821,6 +1887,13 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       noFloor.push(i);
       openLeft.push(i);
       openRight.push(i);
+    } else if (tg === 'funnel' || tg === 'funnelDrop') {
+      // The basin is its own floor and rail; the drop below it has neither.
+      widths[i] = 2 * funnelR(W);
+      noFloor.push(i);
+      openLeft.push(i);
+      openRight.push(i);
+      noSkirt.push(i);
     } else if (tg === 'drop') noFloor.push(i);
     else if (tg === 'spiral' || tg === 'lead') {
       // The corkscrew passes over itself: no earth under it, and the tower is its inner rail.
@@ -1888,7 +1961,9 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       ribbon(
         pts.slice(i, j + 2),
         widths[i] ?? W,
-        'grass',
+        // v1.9: corkscrews are a slicker track (same look) so a ball spins down at a lively pace
+        // instead of crawling round on grass: about 2.3× the rolling speed on the same slope.
+        tags[i] === 'spiral' ? 'metal' : 'grass',
         skirt,
         i > 0 ? segAng(i - 1) : undefined,
         j + 1 < tags.length ? segAng(j + 1) : undefined,
@@ -2220,7 +2295,9 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
       nz = Math.cos(L.ang);
     const wide = L.fork
       ? 2 * Math.max(...L.fork.hs) + W
-      : L.spiral
+      : L.special === 'funnel'
+        ? 2 * funnelR(W) + 0.6
+        : L.spiral
         ? 2 * (2 * L.spiral.R + W)
         : L.amp
           ? W + 2 * Math.abs(L.amp)
@@ -2244,26 +2321,47 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     );
   }
 
-  // ---- 5. Wormhole shortcut on long holes: a small pad tucked beside the rail.
+  // ---- 5. Wormhole on long holes: a pad tucked beside the rail. v1.9: a pad that is easy to roll
+  // over only skips ahead to the middle of the hole; the jackpot pad that warps to the last leg is
+  // tiny, hugs the rail and only takes a ball rolling slower than a walking pace.
   if (legs.length >= 4 && depth >= 4 && arch !== 'fork' && r() < 0.35) {
     const early = flatSegs.filter(
       (i) => i > 0 && i < pts.length / 2 && !openLeft.includes(i) && !openRight.includes(i),
     );
     const j = early.find((i) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][2] - pts[i][2]) >= 5);
     const lastI = pts.length - 2;
-    if (j !== undefined && tags[lastI] !== 'gap') {
+    const jackpot = r() < 0.4;
+    // Exit leg: the last one for the jackpot, else a flat leg near 60% of the way, well past the pad.
+    let exitI = -1;
+    if (j !== undefined) {
+      if (jackpot) exitI = tags[lastI] !== 'gap' ? lastI : -1;
+      else {
+        // By distance along the course (curves have many short segments): about halfway, and
+        // never in the last third.
+        const cum = [0];
+        for (let k = 0; k < pts.length - 1; k++) cum.push(cum[k] + segLenAt(k));
+        const total = cum[cum.length - 1];
+        const mids = flatSegs.filter(
+          (i) => i >= j + 2 && i < lastI && segLenAt(i) >= 3 && (cum[i] + 1.2) / total < 0.66,
+        );
+        mids.sort((x, y) => Math.abs(cum[x] / total - 0.5) - Math.abs(cum[y] / total - 0.5));
+        exitI = mids[0] ?? -1;
+      }
+    }
+    if (j !== undefined && exitI >= 0) {
       const a = pts[j],
         b = pts[j + 1];
       const ang = Math.atan2(b[2] - a[2], b[0] - a[0]);
       const side = r() < 0.5 ? 1 : -1;
-      const lat = W / 2 - 0.45;
+      const radius = jackpot ? 0.2 : 0.36;
+      const lat = W / 2 - (jackpot ? 0.28 : 0.45);
       const A: Vec3 = [
         a[0] + (b[0] - a[0]) * 0.86 - Math.sin(ang) * lat * side,
         a[1],
         a[2] + (b[2] - a[2]) * 0.86 + Math.cos(ang) * lat * side,
       ];
-      const la = pts[lastI],
-        lb = pts[lastI + 1];
+      const la = pts[exitI],
+        lb = pts[exitI + 1];
       const lLen = Math.hypot(lb[0] - la[0], lb[2] - la[2]);
       const exitAng = Math.atan2(lb[2] - la[2], lb[0] - la[0]);
       const k = Math.min(1.2, lLen * 0.3) / lLen;
@@ -2274,10 +2372,15 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
         a: A,
         b: B,
         exitDir: exitAng,
-        radius: 0.36,
+        radius,
+        ...(jackpot ? { maxSpeed: 1.6 } : {}),
         phase: 0,
       });
-      tips.push('A wormhole pad hides beside the rail: a shortcut to the green!');
+      tips.push(
+        jackpot
+          ? 'A tiny wormhole by the rail warps to the green, but only a ball that creeps onto it!'
+          : 'A wormhole pad beside the rail skips you ahead a stretch.',
+      );
     }
   }
 
@@ -2318,6 +2421,56 @@ function golfHole(seed: number, index: number, spec: StageSpec) {
     if (!optionalWater.has(z)) continue;
     const level = z.center[1] + z.size[1] / 2;
     if (rectSamples(z).some(([x, zz]) => covered(x, zz, 0.35, level - 0.05))) zones.splice(k, 1);
+  }
+  // v1.9: the water a hazard needs (a jump's gap, a stream) can also reach down over a green on a
+  // lower tier. Its volume then stops short of that green, so a ball resting there is dry (a ball
+  // that falls from the gap lands on the green, as the geometry says it would).
+  const floorTopAt = (x: number, z: number, margin: number, below: number) => {
+    let best = -Infinity;
+    for (let k = 0; k < pts.length - 1; k++) {
+      if (noFloor.includes(k)) continue;
+      const a = pts[k],
+        b = pts[k + 1];
+      if (segDist([x, 0, z], a, b) > halfAt(k) + margin) continue;
+      const abx = b[0] - a[0],
+        abz = b[2] - a[2];
+      const t = Math.max(0, Math.min(1, ((x - a[0]) * abx + (z - a[2]) * abz) / (abx * abx + abz * abz || 1e-9)));
+      const y = a[1] + (b[1] - a[1]) * t;
+      if (y <= below) best = Math.max(best, y);
+    }
+    for (const sd of extraSolids) {
+      if (sd.role !== 'floor' && sd.role !== 'block') continue;
+      const top = sd.shape === 'funnel' ? sd.center[1] : sd.center[1] + sd.size[1] / 2;
+      if (top > below) continue;
+      const pts2 = sd.left && sd.right ? [...sd.left, ...sd.right] : null;
+      const near = pts2
+        ? pts2.some((p) => Math.hypot(p[0] - x, p[2] - z) < margin + 0.6)
+        : Math.hypot(sd.center[0] - x, sd.center[2] - z) < Math.max(sd.size[0], sd.size[2]) / 2 + margin;
+      if (near) best = Math.max(best, top);
+    }
+    return best;
+  };
+  for (let k = zones.length - 1; k >= 0; k--) {
+    const z = zones[k];
+    if (z.kind !== 'water') continue;
+    const top = z.center[1] + z.size[1] / 2;
+    let floor = -Infinity;
+    const c = Math.cos(z.rotY),
+      sn = Math.sin(z.rotY);
+    for (const u of [-0.5, -0.33, -0.17, 0, 0.17, 0.33, 0.5])
+      for (const v of [-0.5, -0.25, 0, 0.25, 0.5]) {
+        const lx = u * z.size[0],
+          lz = v * z.size[2];
+        floor = Math.max(floor, floorTopAt(z.center[0] + lx * c + lz * sn, z.center[2] - lx * sn + lz * c, 0.35, top - 0.2));
+      }
+    const bottom = z.center[1] - z.size[1] / 2;
+    if (floor + 0.45 <= bottom) continue;
+    const nb = floor + 0.45;
+    if (top - nb < 0.25) zones.splice(k, 1);
+    else {
+      z.size[1] = top - nb;
+      z.center[1] = (top + nb) / 2;
+    }
   }
   if (world !== 'space') {
     const minY = Math.min(...pts.map((p) => p[1]));

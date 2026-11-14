@@ -5,7 +5,10 @@ import {
   clamp,
   dirVec,
   distXZ,
-  domeCapPoints,
+  domeGrid,
+  domeGridIndex,
+  funnelGrid,
+  funnelGridIndex,
   inYawBox,
   quatFromEuler,
   rotateVec,
@@ -156,17 +159,31 @@ export class Simulation {
   // Construction
   // ------------------------------------------------------------------------------------------
 
+  /** Inside a funnel's basin (within its rim, between the hole and a little over the rim). */
+  private inFunnel(p: Vec3): boolean {
+    for (const s of this.hole.solids) {
+      if (s.shape !== 'funnel') continue;
+      if (distXZ(p, s.center) < s.size[0] / 2 && p[1] < s.center[1] + 0.5 && p[1] > s.center[1] - s.size[1] - 0.3)
+        return true;
+    }
+    return false;
+  }
+
   private addStatic(s: Solid, obstacle?: Obstacle): void {
     const ribbon = s.shape === 'ribbon';
     const dome = s.shape === 'dome';
+    const funnel = s.shape === 'funnel';
+    const world = ribbon || dome || funnel;
     const desc = ribbon
       ? ribbonColliderDesc(s)
       : dome
         ? domeColliderDesc(s)
-        : solidColliderDesc(s.shape as 'box', s.size);
-    const q = ribbon || dome ? [0, 0, 0, 1] : quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
+        : funnel
+          ? funnelColliderDesc(s)
+          : solidColliderDesc(s.shape as 'box', s.size);
+    const q = world ? [0, 0, 0, 1] : quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);
     desc
-      .setTranslation(...((ribbon || dome ? [0, 0, 0] : s.center) as [number, number, number]))
+      .setTranslation(...((world ? [0, 0, 0] : s.center) as [number, number, number]))
       .setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] })
       .setFriction(0)
       .setRestitution(s.restitution ?? defaultRestitution(s.role, s.surface))
@@ -653,7 +670,11 @@ export class Simulation {
     if (b.teleCooldown <= 0) {
       for (const o of this.hole.obstacles) {
         if (o.type !== 'teleporter') continue;
-        if (distXZ(s.pos, o.a) < o.radius && Math.abs(s.pos[1] - o.a[1] - PHYSICS.ballRadius) < 0.4) {
+        if (
+          distXZ(s.pos, o.a) < o.radius &&
+          Math.abs(s.pos[1] - o.a[1] - PHYSICS.ballRadius) < 0.4 &&
+          (o.maxSpeed === undefined || Math.hypot(lv.x, lv.z) < o.maxSpeed)
+        ) {
           const d = dirVec(o.exitDir);
           const speed = Math.max(2.5, Math.hypot(lv.x, lv.z));
           const np: Vec3 = [o.b[0] + d[0] * 0.45, o.b[1] + PHYSICS.ballRadius + 0.02, o.b[2] + d[2] * 0.45];
@@ -695,8 +716,13 @@ export class Simulation {
       b.slowTime = 0;
     }
 
-    // Stuck: moving for a while without getting anywhere (e.g. rocking in a trough).
+    // Stuck: moving for a while without getting anywhere (e.g. rocking in a trough). A ball
+    // spinning round a funnel is going somewhere (down the hole), however little it moves.
     b.stuckTimer += DT;
+    if (b.stuckTimer > PHYSICS.stuckTime && this.inFunnel(s.pos)) {
+      b.stuckTimer = 0;
+      b.stuckAnchor = [...s.pos];
+    }
     if (b.stuckTimer > PHYSICS.stuckTime) {
       const dx = s.pos[0] - b.stuckAnchor[0],
         dz = s.pos[2] - b.stuckAnchor[2];
@@ -812,17 +838,22 @@ function solidColliderDesc(shape: 'box' | 'cylinder', size: Vec3): RAPIER.Collid
 }
 
 /**
- * A dome is the convex hull of its visible cap (world space). It used to be the whole sphere the
- * cap is cut from, which is ~3x wider than the cap and reaches 1.5 m below the green: hidden under
- * a solid green, but sticking out past rails, ledges and gaps as an invisible bulge.
+ * A dome is a triangle mesh of its bell-shaped surface (v1.9; was the convex hull of a spherical
+ * cap), with internal edges smoothed so the ball rolls over it without catching on facets.
  */
 function domeColliderDesc(s: Solid): RAPIER.ColliderDesc {
-  const pts = domeCapPoints(s.center, s.size);
+  const pts = domeGrid(s.center, s.size);
   const v = new Float32Array(pts.length * 3);
   pts.forEach((p, i) => v.set(p, i * 3));
-  const hull = RAPIER.ColliderDesc.convexHull(v);
-  if (!hull) throw new Error('dome hull failed');
-  return hull;
+  return RAPIER.ColliderDesc.trimesh(v, new Uint32Array(domeGridIndex()), RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES);
+}
+
+/** A funnel's basin as a triangle mesh (internal edges smoothed), open at the hole. */
+function funnelColliderDesc(s: Solid): RAPIER.ColliderDesc {
+  const pts = funnelGrid(s.center, s.size);
+  const v = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => v.set(p, i * 3));
+  return RAPIER.ColliderDesc.trimesh(v, new Uint32Array(funnelGridIndex()), RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES);
 }
 
 /** Top surface of a ribbon as a triangle mesh (internal edges smoothed so seams can't kick). */
@@ -852,6 +883,16 @@ export function computeBounds(solids: Solid[]): { min: Vec3; max: Vec3 } {
   const min: Vec3 = [Infinity, Infinity, Infinity];
   const max: Vec3 = [-Infinity, -Infinity, -Infinity];
   for (const s of solids) {
+    if (s.shape === 'funnel') {
+      const a = s.size[0] / 2;
+      for (let i = 0; i < 3; i++) {
+        const lo = i === 1 ? s.center[1] - s.size[1] - 0.1 : s.center[i] - a;
+        const hi = i === 1 ? s.center[1] : s.center[i] + a;
+        min[i] = Math.min(min[i], lo);
+        max[i] = Math.max(max[i], hi);
+      }
+      continue;
+    }
     if (s.shape === 'dome') {
       const a = s.size[0] / 2;
       for (let i = 0; i < 3; i++) {

@@ -18,8 +18,10 @@ export const SolidSchema = z.object({
   /**
    * ribbon: a smooth strip along `path` (slides, spirals, curves); size = [unused, thickness, width].
    * dome: a low mound; center = middle of its base on the floor, size = [diameter, height, diameter].
+   * funnel: a basin with a hole in its middle; center = middle of the rim at rim height,
+   * size = [rim diameter, depth, hole diameter].
    */
-  shape: z.enum(['box', 'cylinder', 'ribbon', 'dome']),
+  shape: z.enum(['box', 'cylinder', 'ribbon', 'dome', 'funnel']),
   /** floor: walkable, checker-rendered. wall: rail. block: solid obstacle. */
   role: z.enum(['floor', 'wall', 'block']),
   center: Vec3Schema,
@@ -104,6 +106,8 @@ export const ObstacleSchema = z.discriminatedUnion('type', [
     b: Vec3Schema,
     exitDir: num.default(0),
     radius: num.default(0.4),
+    /** Only a ball rolling slower than this (m/s) warps; faster ones roll over the pad. */
+    maxSpeed: num.positive().optional(),
   }),
   z.object({
     ...ObstacleBase,

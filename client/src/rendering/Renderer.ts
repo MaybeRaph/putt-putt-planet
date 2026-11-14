@@ -597,6 +597,31 @@ export class Renderer {
     if (this.grain) this.grain.uniforms.uSize.value = Math.max(1, pr * 0.9);
   }
 
+  /**
+   * Compile every shader and upload every texture the scene uses, now (while a new hole loads and
+   * its intro holds still on the cup) instead of the first time each piece comes into view: that
+   * stall, mid-flyover, was the intro's remaining hitch (v1.9).
+   */
+  warmUp(): void {
+    if (this.contextLost) return;
+    try {
+      this.gl.compile(this.scene, this.camera);
+      const seen = new Set<THREE.Texture>();
+      this.scene.traverse((o) => {
+        const mat = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        if (!mat) return;
+        for (const m of Array.isArray(mat) ? mat : [mat])
+          for (const v of Object.values(m))
+            if (v && (v as THREE.Texture).isTexture && !seen.has(v as THREE.Texture)) {
+              seen.add(v as THREE.Texture);
+              this.gl.initTexture(v as THREE.Texture);
+            }
+      });
+    } catch (e) {
+      console.warn('[render] warm-up failed', e);
+    }
+  }
+
   render(dt = 1 / 60): void {
     if (this.contextLost) return;
     this.time += dt;

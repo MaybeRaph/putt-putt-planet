@@ -156,7 +156,7 @@ export interface WaterOpts {
   /** Earth material for the banks (the course's skirt material). */
   bankMat: THREE.Material;
   /** True where the course (greens, rails) covers the ground: no reeds or lily pads there. */
-  blocked?: (x: number, z: number) => boolean;
+  blocked?: (x: number, z: number, margin?: number) => boolean;
 }
 
 /** Builds every body of water in a hole's zones. */
@@ -585,6 +585,8 @@ function scatterShore(
       // On the rim: an occasional boulder.
       if (d > EDGE + 0.02 && d < EDGE + RIM_W && h < 0.045) {
         const s = 0.16 + hash(px, pz, 4) * 0.2;
+        // The whole boulder clear of rails and greens, not just its middle.
+        if (o.blocked?.(px, pz, s * 1.35 + 0.05)) continue;
         q.setFromAxisAngle(up, hash(px, pz, 5) * 6.28);
         rocks.push(
           new THREE.Matrix4().compose(

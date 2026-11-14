@@ -83,6 +83,7 @@ export class PlayScene {
         onChat: (t) => this.session.sendChat(t),
         onVote: (i) => this.session.hopperVote(i),
         onReroll: () => this.session.hopperReroll(),
+        onSpectate: (dir) => this.cycleSpectate(dir),
       },
       session.kind === 'remote',
     );
@@ -167,7 +168,19 @@ export class PlayScene {
     const layers = this.session.players().filter((p) => p.connected).length;
     audio.playTheme(theme, Math.max(1, layers));
     for (let i = 0; i < 3; i++) this.hud.removeLabel(`crate:${i}`);
+    this.renderer.warmUp();
+    this.introDt = 1 / 60;
     this.startIntro();
+  }
+
+  /**
+   * The flyover's clock: real frame time, but clamped and smoothed, so one slow frame (a hole
+   * still settling in, a GC pause) holds the camera for a moment instead of jumping it ahead.
+   */
+  private introDt = 1 / 60;
+  private introStep(dt: number): number {
+    this.introDt += (Math.min(dt, 1 / 30) - this.introDt) * 0.25;
+    return this.introDt;
   }
 
   // ------------------------------------------------------------------------------------------
@@ -303,10 +316,32 @@ export class PlayScene {
       case 'scoreboardUp':
         this.hud.showFullBoard(false);
         break;
+      case 'spectate':
+        this.cycleSpectate(1);
+        break;
       case 'debug':
         this.toggleDebug();
         break;
     }
+  }
+
+  /** Ball being watched once mine is in (null: the first one still playing). */
+  private spectateId: string | null = null;
+  /** Balls still playing the hole that I could watch, in a stable order. */
+  private spectateCandidates(): string[] {
+    const myId = this.session.myEntrant();
+    return this.session
+      .renderBalls()
+      .filter((b) => b.id !== myId && b.phase !== 'holed')
+      .map((b) => b.id)
+      .sort();
+  }
+
+  private cycleSpectate(dir: 1 | -1): void {
+    const ids = this.spectateCandidates();
+    if (ids.length < 2) return;
+    const i = this.spectateId ? ids.indexOf(this.spectateId) : 0;
+    this.spectateId = ids[(Math.max(0, i) + dir + ids.length) % ids.length];
   }
 
   // ------------------------------------------------------------------------------------------
@@ -727,17 +762,25 @@ export class PlayScene {
     if (this.hazardHold && performance.now() < this.hazardHold.until) focus = this.hazardHold.pos;
     else if (me && me.phase !== 'holed') focus = v3(me.pos);
     else {
-      const other = balls.find((b) => b.phase !== 'holed');
+      // Spectating: the chosen player (F / the arrows on the bar switch), else the first one.
+      const ids = this.spectateCandidates();
+      if (!this.spectateId || !ids.includes(this.spectateId)) this.spectateId = ids[0] ?? null;
+      const other = balls.find((b) => b.id === this.spectateId) ?? balls.find((b) => b.phase !== 'holed');
       focus = other
         ? v3(other.pos)
         : this.fallbackFocus.copy(v3(this.session.course.holes[this.loadedHole].cup));
     }
+    const watching = !(me && me.phase !== 'holed') && this.spectateId && this.session.mode !== 'relay';
+    this.hud.setSpectate(
+      watching && !this.intro ? this.nameOf(this.spectateId!) : null,
+      this.spectateCandidates().length > 1,
+    );
     this.rig.update(dt, focus);
     if (this.intro) {
       // The rig has just placed the gameplay camera; the intro blends the flyover into it.
       // Paused: the flyover waits where it is.
       this.intro.update(
-        this.game.paused ? 0 : dt,
+        this.game.paused ? 0 : this.introStep(dt),
         this.rig.camera,
         this.rig.camera.position.clone(),
         this.rig.lookPoint,

@@ -157,7 +157,7 @@ function solidPolys(s: Solid): P2[][] {
       ]);
     return out;
   }
-  if (s.shape === 'dome') return [circlePoly(s.center[0], s.center[2], s.size[0] / 2)];
+  if (s.shape === 'dome' || s.shape === 'funnel') return [circlePoly(s.center[0], s.center[2], s.size[0] / 2 + (s.shape === 'funnel' ? 0.2 : 0))];
   if (s.shape === 'cylinder') return [circlePoly(s.center[0], s.center[2], s.size[0] / 2)];
   // Box: hull of its 8 corners seen from above (handles yaw, pitch and roll).
   const q = quatFromEuler(s.rot[0], s.rot[1], s.rot[2]);

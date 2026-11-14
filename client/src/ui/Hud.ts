@@ -27,6 +27,8 @@ export interface HudCallbacks {
   onChat(text: string): void;
   onVote(option: number): void;
   onReroll(): void;
+  /** Watch the next (1) or previous (-1) player still playing the hole. */
+  onSpectate(dir: 1 | -1): void;
 }
 
 /** In-game HTML overlay: hole info, strokes, power meter, scoreboard, counters, messages. */
@@ -134,6 +136,24 @@ export class Hud {
       h('div', { class: 'wheel-center' }, 'Emote'),
     );
     this.fullBoard = h('div', { class: 'full-board hidden' });
+    this.spectateName = h('b', {}, '');
+    this.spectatePrev = h(
+      'button',
+      { class: 'btn small', title: 'Previous player', onclick: () => cb.onSpectate(-1) },
+      '◀',
+    );
+    this.spectateNext = h(
+      'button',
+      { class: 'btn small', title: 'Next player (F)', onclick: () => cb.onSpectate(1) },
+      '▶',
+    );
+    this.spectateBar = h(
+      'div',
+      { class: 'spectate-bar hidden' },
+      this.spectatePrev,
+      h('span', {}, '👁 Watching ', this.spectateName),
+      this.spectateNext,
+    );
 
     this.root = h(
       'div',
@@ -161,6 +181,7 @@ export class Hud {
         ),
       ),
       this.turnBanner,
+      this.spectateBar,
       this.msg,
       this.tip,
       this.meter,
@@ -191,6 +212,23 @@ export class Hud {
     parent.appendChild(this.root);
     if (course.id === 'hopper')
       this.hopper = new HopperHud(this.root, { vote: (i) => cb.onVote(i), reroll: () => cb.onReroll() });
+  }
+
+  private readonly spectateBar: HTMLElement;
+  private readonly spectateName: HTMLElement;
+  private readonly spectatePrev: HTMLElement;
+  private readonly spectateNext: HTMLElement;
+  private spectateKey = '';
+
+  /** Who you're watching once you've finished the hole (null hides the bar). */
+  setSpectate(name: string | null, canSwitch: boolean): void {
+    const key = name === null ? '' : `${name}|${canSwitch}`;
+    if (key === this.spectateKey) return;
+    this.spectateKey = key;
+    this.spectateBar.classList.toggle('hidden', name === null);
+    this.spectateName.textContent = name ?? '';
+    this.spectatePrev.classList.toggle('hidden', !canSwitch);
+    this.spectateNext.classList.toggle('hidden', !canSwitch);
   }
 
   setHole(index: number, score: ScoreState): void {

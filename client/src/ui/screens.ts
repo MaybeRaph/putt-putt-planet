@@ -847,7 +847,7 @@ export class Screens {
       h('input', {
         type: 'checkbox',
         checked: room.chaos,
-        disabled: !isHost || room.mode === 'relay' || hopper,
+        disabled: !isHost || room.mode === 'relay',
         onchange: (e: Event) =>
           g.net.send({
             t: 'configure',
@@ -900,7 +900,7 @@ export class Screens {
           h('h3', {}, isHost ? 'Game settings' : 'Game settings (host decides)'),
           hopper ? null : h('label', { class: 'setting' }, h('span', {}, 'Course'), courseSel),
           h('div', { class: 'modes' }, ...modeBtns),
-          hopper ? null : chaos,
+          chaos,
           h(
             'div',
             { class: 'muted' },

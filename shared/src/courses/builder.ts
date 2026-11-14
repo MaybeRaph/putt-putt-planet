@@ -249,6 +249,43 @@ export function dome(x: number, z: number, y: number, diameter: number, height: 
   };
 }
 
+/**
+ * A funnel basin (see `funnelHeightAt`): rim of radius `R` at height `y` centred on (x, z),
+ * `depth` down to a hole of radius `hole` in its middle. Floor only; its rim wall is separate.
+ */
+export function funnel(x: number, z: number, y: number, R: number, depth: number, hole: number): Solid {
+  return {
+    shape: 'funnel',
+    role: 'floor',
+    center: [x, y, z],
+    size: [R * 2, depth, hole * 2],
+    rot: [0, 0, 0],
+    surface: 'metal',
+    skirt: false,
+  };
+}
+
+/** A ring of rail round a circle (centre at floor height `y`), leaving out the arc whose middle
+ * points along `gapDir` and whose chord is `gapWidth` wide. */
+export function ringWall(x: number, z: number, y: number, R: number, gapDir: number, gapWidth: number, n = 40): Solid[] {
+  const out: Solid[] = [];
+  const rr = R + WALL_T / 2;
+  const halfGap = Math.asin(Math.min(1, gapWidth / 2 / rr));
+  for (let k = 0; k < n; k++) {
+    const t0 = (Math.PI * 2 * k) / n,
+      t1 = (Math.PI * 2 * (k + 1)) / n;
+    const mid = (t0 + t1) / 2;
+    const off = Math.atan2(Math.sin(mid - gapDir), Math.cos(mid - gapDir));
+    if (Math.abs(off) < halfGap) continue;
+    // Chords a touch longer than the arc step so neighbouring pieces overlap at the joints.
+    const e = 0.04;
+    const a: Vec3 = [x + rr * Math.cos(t0 - e), y, z + rr * Math.sin(t0 - e)];
+    const b: Vec3 = [x + rr * Math.cos(t1 + e), y, z + rr * Math.sin(t1 + e)];
+    out.push(beam(a, b, WALL_T, WALL_H + FLOOR_T, 'wall', 'grass', WALL_H));
+  }
+  return out;
+}
+
 /** Flat rectangular floor slab from (x0,z0) to (x1,z1) with top at y. */
 export function slab(
   x0: number,

@@ -61,35 +61,107 @@ export function solidRibbon(s: {
 }
 
 /**
- * A low mound (spherical cap) on the green: `center` is the middle of its base on the floor,
- * `size` = [base diameter, height, base diameter]. Returns the sphere it is cut from.
+ * Height of a dome's surface above its base at distance `rho` from its middle. v1.9: a cosine
+ * bell (was a spherical cap): it meets the green tangentially and is rounded on top, so there is
+ * no crease at the rim for the eye or for a rolling ball. Max slope = height * PI / diameter.
  */
-export function domeSphere(center: Vec3, size: Vec3): { c: Vec3; r: number } {
+export function domeHeightAt(size: Vec3, rho: number): number {
   const a = size[0] / 2,
     h = Math.max(0.01, size[1]);
-  const r = (a * a + h * h) / (2 * h);
-  return { c: [center[0], center[1] + h - r, center[2]], r };
+  if (rho >= a) return 0;
+  return h * 0.5 * (1 + Math.cos((Math.PI * rho) / a));
 }
 
 /**
- * Points on a dome's visible cap (rings from the rim up to the top, plus the apex), in world
- * space. The physics hull is built from these, so the collider is exactly the cap that is drawn
- * and nothing of the sphere it is cut from pokes out under or beside the green.
+ * A dome's surface as a polar grid: index 0 is the apex, then `rings` rings of `around` points
+ * from just off the top out to the rim (the rim sits a hair under the green so the floor carries
+ * the ball there). World space. Physics and rendering both use it, so what is drawn is what the
+ * ball rolls on.
  */
-export function domeCapPoints(center: Vec3, size: Vec3, around = 64, rings = 16): Vec3[] {
-  const { c, r } = domeSphere(center, size);
-  const theta = Math.acos(Math.max(-1, Math.min(1, (r - Math.max(0.01, size[1])) / r)));
-  const out: Vec3[] = [[c[0], c[1] + r, c[2]]];
+export function domeGrid(center: Vec3, size: Vec3, around = 40, rings = 12): Vec3[] {
+  const a = size[0] / 2;
+  const out: Vec3[] = [[center[0], center[1] + domeHeightAt(size, 0), center[2]]];
   for (let i = 1; i <= rings; i++) {
-    const t = (theta * i) / rings;
-    const ring = r * Math.sin(t),
-      y = c[1] + r * Math.cos(t);
+    const rho = (a * i) / rings;
+    const y = center[1] + (i === rings ? -0.003 : domeHeightAt(size, rho));
     for (let j = 0; j < around; j++) {
-      const a = (Math.PI * 2 * j) / around;
-      out.push([c[0] + ring * Math.cos(a), y, c[2] + ring * Math.sin(a)]);
+      const t = (Math.PI * 2 * j) / around;
+      out.push([center[0] + rho * Math.cos(t), y, center[2] + rho * Math.sin(t)]);
     }
   }
   return out;
+}
+
+/** Triangle indices for `domeGrid` (counter-clockwise seen from above). */
+export function domeGridIndex(around = 40, rings = 12): number[] {
+  const idx: number[] = [];
+  const at = (i: number, j: number) => 1 + (i - 1) * around + (j % around);
+  for (let j = 0; j < around; j++) idx.push(0, at(1, j + 1), at(1, j));
+  for (let i = 1; i < rings; i++)
+    for (let j = 0; j < around; j++) {
+      const a = at(i, j),
+        b = at(i, j + 1),
+        c = at(i + 1, j),
+        d = at(i + 1, j + 1);
+      idx.push(a, b, c, b, d, c);
+    }
+  return idx;
+}
+
+/**
+ * Funnel (v1.9): a round basin that a ball spins and bounces round before dropping through the
+ * hole in its middle. `center` = middle of the rim at rim height, `size` = [rim diameter, depth,
+ * hole diameter]. A collar (FUNNEL_COLLAR wide, tipping gently in) runs inside the rim, where the
+ * straight green that feeds it overlaps it; inside that the surface falls away, half a cone and
+ * half a gravity well (steepest at the hole). Nowhere is it flat enough for a ball to stop.
+ */
+export const FUNNEL_COLLAR = 0.48;
+/** The collar tips gently inwards (too steep for a ball to stop on, gentle enough to look flat). */
+export const FUNNEL_COLLAR_SLOPE = 0.1;
+
+export function funnelHeightAt(size: Vec3, rho: number): number {
+  const R = size[0] / 2,
+    D = size[1],
+    rh = size[2] / 2;
+  const Rw = R - FUNNEL_COLLAR;
+  if (rho >= Rw) return -FUNNEL_COLLAR_SLOPE * Math.max(0, R - rho);
+  const q = Math.max(rh, rho);
+  const u = (Rw - q) / (Rw - rh);
+  const well = (rh / q - rh / Rw) / (1 - rh / Rw);
+  return -FUNNEL_COLLAR_SLOPE * FUNNEL_COLLAR - D * (0.5 * u + 0.5 * well);
+}
+
+/** A funnel's surface as rings (hole edge outwards) of `around` points each, world space. */
+export function funnelGrid(center: Vec3, size: Vec3, around = 48, rings = 18): Vec3[] {
+  const R = size[0] / 2,
+    rh = size[2] / 2;
+  const out: Vec3[] = [];
+  for (let i = 0; i <= rings; i++) {
+    // Rings bunch up towards the hole, where the surface curves fastest.
+    const u = i / rings;
+    const rr = i === rings ? R : rh + (R - rh) * Math.pow(u, 1.6);
+    const y = center[1] + funnelHeightAt(size, rr);
+    for (let j = 0; j < around; j++) {
+      const t = (Math.PI * 2 * j) / around;
+      out.push([center[0] + rr * Math.cos(t), y, center[2] + rr * Math.sin(t)]);
+    }
+  }
+  return out;
+}
+
+/** Triangle indices for `funnelGrid` (facing up). */
+export function funnelGridIndex(around = 48, rings = 18): number[] {
+  const idx: number[] = [];
+  const at = (i: number, j: number) => i * around + (j % around);
+  for (let i = 0; i < rings; i++)
+    for (let j = 0; j < around; j++) {
+      const a = at(i, j),
+        b = at(i, j + 1),
+        c = at(i + 1, j),
+        d = at(i + 1, j + 1);
+      idx.push(a, b, c, b, d, c);
+    }
+  return idx;
 }
 
 /** Unit vector in the XZ plane for an angle (0 = +X, PI/2 = +Z). */
