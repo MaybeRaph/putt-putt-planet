@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import {
+  CASES,
   DEFAULT_LOADOUT,
   PHYSICS,
+  caseOfItem,
   REST_CRATES,
   REWARDS,
   SKELETON,
@@ -95,6 +97,7 @@ export class PlayScene {
       onShoot: (angle, power) => this.shoot(angle, power),
       onAction: (a) => this.onAction(a),
       onAimStart: () => this.hud.hideTip(),
+      onAimCancel: () => audio.ui('back'),
     });
 
     this.unsub.push(
@@ -521,6 +524,23 @@ export class PlayScene {
         break;
       case 'collected': {
         const pos = this.view?.collect(ev.item);
+        if (ev.kind === 'case') {
+          // v1.11 hidden case: the run's note ("… found! Everyone gets one") tells every player.
+          audio.pickup('golden');
+          this.rig.shake(0.1);
+          const def = CASES[caseOfItem(ev.item) ?? 'meadow'];
+          if (pos)
+            this.particles.burst(pos, {
+              count: 46,
+              colors: [def.color, def.color2, '#ffe08a', '#ffffff'],
+              speed: 3.4,
+              spread: 1.2,
+              life: 0.9,
+              size: 0.1,
+              gravity: -2.5,
+            });
+          break;
+        }
         audio.pickup(ev.kind);
         this.hud.collect(ev.kind);
         if (pos) {

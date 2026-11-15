@@ -22,6 +22,21 @@ export type Stats = z.infer<typeof StatsSchema>;
 
 const idStr = z.string().min(1).max(64);
 
+const Counts = z.record(z.string().max(20), z.number().int().nonnegative());
+export const CasesSchema = z.object({
+  found: Counts.default({}),
+  opened: Counts.default({}),
+  keys: Counts.default({}),
+});
+export type CaseCounts = z.infer<typeof CasesSchema>;
+export const defaultCases = (): CaseCounts => ({ found: {}, opened: {}, keys: {} });
+
+function maxCounts(a: Record<string, number>, b: Record<string, number>): Record<string, number> {
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b)) out[k] = Math.max(out[k] ?? 0, v);
+  return out;
+}
+
 export const ProfileSchema = z.object({
   version: z.literal(1),
   id: idStr,
@@ -46,6 +61,11 @@ export const ProfileSchema = z.object({
   daily: z.object({ date: z.string(), best: z.number().int().nullable() }),
   /** Planet Hopper meta-progression (Clubhouse). */
   hopper: HopperProfileSchema.default(defaultHopperProfile),
+  /**
+   * v1.11 cases, as running totals per case (planet) id so two copies merge safely (max of
+   * each): cases in hand = found - opened, keys in hand = keys - opened.
+   */
+  cases: CasesSchema.default(defaultCases),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
@@ -68,6 +88,7 @@ export function defaultProfile(id: string, name: string): Profile {
     stats: StatsSchema.parse({}),
     daily: { date: '', best: null },
     hopper: defaultHopperProfile(),
+    cases: defaultCases(),
   };
 }
 
@@ -138,5 +159,11 @@ export function mergeProfiles(a: Profile, b: Profile): Profile {
     stats,
     daily,
     hopper: mergeHopper(a.hopper, b.hopper),
+    cases: {
+      // `?? {}`: a copy from before v1.11 (an older host's) has no cases at all.
+      found: maxCounts(a.cases?.found ?? {}, b.cases?.found ?? {}),
+      opened: maxCounts(a.cases?.opened ?? {}, b.cases?.opened ?? {}),
+      keys: maxCounts(a.cases?.keys ?? {}, b.cases?.keys ?? {}),
+    },
   };
 }

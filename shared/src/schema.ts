@@ -127,7 +127,7 @@ export type ObstacleType = Obstacle['type'];
 
 export const CollectibleSchema = z.object({
   id: z.string(),
-  kind: z.enum(['coin', 'gem', 'golden', 'crate']),
+  kind: z.enum(['coin', 'gem', 'golden', 'crate', 'case']),
   pos: Vec3Schema,
 });
 export type Collectible = z.infer<typeof CollectibleSchema>;

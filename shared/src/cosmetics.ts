@@ -2,12 +2,41 @@
 
 export type CosmeticSlot = 'ball' | 'trail' | 'putter' | 'hat' | 'victory' | 'hio';
 
+/** Case regions: one case per planet (see cases.ts). */
+export type CaseId = 'meadow' | 'candy' | 'frozen' | 'clockwork' | 'space';
+/** Skin and case rarities, lowest first. */
+export const RARITIES = ['common', 'rare', 'epic', 'legendary', 'mythic'] as const;
+export type Rarity = (typeof RARITIES)[number];
+
 export type Unlock =
   | { type: 'default' }
   | { type: 'level'; level: number }
   | { type: 'shop'; price: number }
   | { type: 'achievement'; id: string }
-  | { type: 'crate' };
+  | { type: 'crate' }
+  /** Only from opening this planet's case (see cases.ts). */
+  | { type: 'case'; case: CaseId };
+
+export type SkinPattern =
+  | 'solid'
+  | 'stripes'
+  | 'dots'
+  | 'star'
+  | 'half'
+  | 'rainbow'
+  | 'galaxy'
+  | 'swirl'
+  // v1.11 case skins
+  | 'gradient'
+  | 'rings'
+  | 'sprinkles'
+  | 'hex'
+  | 'crystal'
+  | 'gear'
+  | 'circuit'
+  | 'nebula'
+  | 'marble'
+  | 'petals';
 
 export interface Cosmetic {
   id: string;
@@ -16,10 +45,17 @@ export interface Cosmetic {
   /** Primary colour (UI swatch + renderer). */
   color: string;
   color2?: string;
-  pattern?: 'solid' | 'stripes' | 'dots' | 'star' | 'half' | 'rainbow' | 'galaxy' | 'swirl';
+  pattern?: SkinPattern;
   /** Putters: head style (looks only; every putter plays the same). */
   shape?: PutterShape;
   unlock: Unlock;
+  /** Case skins: how rare the drop is. */
+  rarity?: Rarity;
+  /**
+   * Extra render effect. metal: polished. glow: lit from inside with a soft aura.
+   * mythic: animated holographic shell, pulsing aura, orbiting sparks and a stardust wake.
+   */
+  fx?: 'metal' | 'glow' | 'mythic';
 }
 
 export type PutterShape = 'blade' | 'mallet' | 'fang' | 'hammer' | 'hockey' | 'flamingo' | 'cane' | 'star' | 'rocket';
@@ -110,7 +146,79 @@ export const COSMETICS: Cosmetic[] = [
   C('hio.hearts', 'hio', 'Hearts', '#ff4081', shop(250)),
   C('hio.stars', 'hio', 'Starburst', '#ffd740', ach('ace_collector')),
   C('hio.bubbles', 'hio', 'Bubbles', '#80d8ff', crate),
+  ...caseSkins(),
 ];
+
+/**
+ * v1.11 case skins: they only come out of their planet's case. Each case holds 3 common,
+ * 2 rare, 1 epic, 1 legendary and 1 mythic skin.
+ */
+function caseSkins(): Cosmetic[] {
+  type X = Partial<Pick<Cosmetic, 'color2' | 'pattern' | 'shape' | 'fx'>>;
+  const k =
+    (cs: CaseId) =>
+    (id: string, slot: CosmeticSlot, name: string, rarity: Rarity, color: string, extra: X = {}): Cosmetic => ({
+      id,
+      slot,
+      name,
+      color,
+      rarity,
+      unlock: { type: 'case', case: cs },
+      ...extra,
+    });
+  const m = k('meadow'),
+    c = k('candy'),
+    f = k('frozen'),
+    w = k('clockwork'),
+    s = k('space');
+  return [
+    // 🌻 Meadow Case
+    m('ball.clover', 'ball', 'Four-Leaf', 'common', '#43a047', { color2: '#c8e6c9', pattern: 'dots' }),
+    m('ball.ladybug', 'ball', 'Ladybug', 'common', '#e53935', { color2: '#1b1b1b', pattern: 'dots' }),
+    m('trail.pollen', 'trail', 'Pollen Drift', 'common', '#ffee58', { color2: '#fffde7' }),
+    m('ball.sunflower', 'ball', 'Sunflower', 'rare', '#ffca28', { color2: '#6d4c41', pattern: 'petals' }),
+    m('putter.hedge', 'putter', 'Hedge Trimmer', 'rare', '#2e7d32', { color2: '#cfd8dc', shape: 'fang' }),
+    m('ball.honeycomb', 'ball', 'Honeycomb', 'epic', '#ffb300', { color2: '#fff3c4', pattern: 'hex', fx: 'metal' }),
+    m('trail.bloom', 'trail', 'Wildflower Bloom', 'legendary', '#ff80ab', { color2: '#b2ff59', fx: 'glow' }),
+    m('ball.gaia', 'ball', 'Gaia', 'mythic', '#00e676', { color2: '#ffd740', pattern: 'petals', fx: 'mythic' }),
+    // 🍭 Candy Case
+    c('ball.gumdrop', 'ball', 'Gumdrop', 'common', '#ab47bc', { color2: '#fff176', pattern: 'sprinkles' }),
+    c('ball.licorice', 'ball', 'Licorice', 'common', '#212121', { color2: '#e53935', pattern: 'stripes' }),
+    c('trail.cottoncandy', 'trail', 'Cotton Candy', 'common', '#f8bbd0', { color2: '#b3e5fc' }),
+    c('ball.jawbreaker', 'ball', 'Jawbreaker', 'rare', '#ff4081', { color2: '#40c4ff', pattern: 'rings' }),
+    c('putter.lollipop', 'putter', 'Lollipop', 'rare', '#ff4081', { color2: '#ffffff', shape: 'star' }),
+    c('ball.sprinklebomb', 'ball', 'Sprinkle Bomb', 'epic', '#ff80ab', { color2: '#7c4dff', pattern: 'sprinkles', fx: 'glow' }),
+    c('ball.caramel', 'ball', 'Caramel Swirl', 'legendary', '#c77c2e', { color2: '#ffe0b2', pattern: 'marble', fx: 'metal' }),
+    c('ball.sugarnova', 'ball', 'Sugarplum Nova', 'mythic', '#ff2d95', { color2: '#22e4ff', pattern: 'sprinkles', fx: 'mythic' }),
+    // ❄️ Frozen Case
+    f('ball.snowball', 'ball', 'Snowball', 'common', '#e3f2fd', { color2: '#90caf9', pattern: 'dots' }),
+    f('ball.glacier', 'ball', 'Glacier', 'common', '#4fc3f7', { color2: '#e1f5fe', pattern: 'gradient' }),
+    f('trail.frost', 'trail', 'Hoarfrost', 'common', '#b3e5fc', { color2: '#ffffff' }),
+    f('ball.icicle', 'ball', 'Icicle', 'rare', '#81d4fa', { color2: '#ffffff', pattern: 'crystal' }),
+    f('putter.icepick', 'putter', 'Ice Pick', 'rare', '#b3e5fc', { color2: '#37474f', shape: 'fang' }),
+    f('ball.aurora', 'ball', 'Aurora', 'epic', '#00e5ff', { color2: '#d500f9', pattern: 'gradient', fx: 'glow' }),
+    f('ball.diamonddust', 'ball', 'Diamond Dust', 'legendary', '#e0f7fa', { color2: '#80deea', pattern: 'crystal', fx: 'metal' }),
+    f('ball.absolutezero', 'ball', 'Absolute Zero', 'mythic', '#7df9ff', { color2: '#ffffff', pattern: 'crystal', fx: 'mythic' }),
+    // ⚙️ Clockwork Case
+    w('ball.brass', 'ball', 'Polished Brass', 'common', '#c8a046', { color2: '#7a5c1e', pattern: 'gradient', fx: 'metal' }),
+    w('ball.rivet', 'ball', 'Riveted', 'common', '#78909c', { color2: '#cfd8dc', pattern: 'dots', fx: 'metal' }),
+    w('trail.steam', 'trail', 'Steam Vent', 'common', '#eceff1', { color2: '#90a4ae' }),
+    w('ball.cogwork', 'ball', 'Cogwork', 'rare', '#b87333', { color2: '#5d4037', pattern: 'gear', fx: 'metal' }),
+    w('putter.wrench', 'putter', 'Big Wrench', 'rare', '#b0bec5', { color2: '#d84315', shape: 'hammer' }),
+    w('ball.circuit', 'ball', 'Live Circuit', 'epic', '#0b3d2e', { color2: '#00ff9c', pattern: 'circuit', fx: 'glow' }),
+    w('putter.tesla', 'putter', 'Tesla Coil', 'legendary', '#263238', { color2: '#40c4ff', shape: 'rocket' }),
+    w('ball.chronos', 'ball', 'Chronos', 'mythic', '#ffc400', { color2: '#00e5c0', pattern: 'gear', fx: 'mythic' }),
+    // 🪐 Space Case
+    s('ball.moonrock', 'ball', 'Moon Rock', 'common', '#9e9e9e', { color2: '#616161', pattern: 'dots' }),
+    s('ball.redplanet', 'ball', 'Red Planet', 'common', '#d84315', { color2: '#ffab91', pattern: 'marble' }),
+    s('trail.comet', 'trail', 'Comet Tail', 'common', '#82b1ff', { color2: '#ffffff' }),
+    s('ball.ringworld', 'ball', 'Ringworld', 'rare', '#ffcc80', { color2: '#8d6e63', pattern: 'rings' }),
+    s('putter.saber', 'putter', 'Star Saber', 'rare', '#eceff1', { color2: '#ff1744', shape: 'blade' }),
+    s('ball.nebula', 'ball', 'Nebula', 'epic', '#311b92', { color2: '#ff4081', pattern: 'nebula', fx: 'glow' }),
+    s('trail.warp', 'trail', 'Warp Drive', 'legendary', '#7c4dff', { color2: '#18ffff', fx: 'glow' }),
+    s('ball.eventhorizon', 'ball', 'Event Horizon', 'mythic', '#0a0014', { color2: '#ff9100', pattern: 'nebula', fx: 'mythic' }),
+  ];
+}
 
 export const COSMETIC_BY_ID = new Map(COSMETICS.map((c) => [c.id, c]));
 

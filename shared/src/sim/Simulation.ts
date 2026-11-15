@@ -92,6 +92,11 @@ export interface SimOptions {
 }
 
 const PICKUP_RADIUS = 0.5;
+/**
+ * v1.11 hidden cases: the ball has to roll (almost) over one, about 0.29 m either side of its
+ * centre on the flat instead of 0.48 m, so a case takes an accurate putt, not a near miss.
+ */
+export const CASE_PICKUP_RADIUS = 0.32;
 
 export class Simulation {
   readonly hole: Hole;
@@ -688,12 +693,13 @@ export class Simulation {
       }
     }
 
-    // Collectibles (generous magnetic radius).
+    // Collectibles (generous magnetic radius; hidden cases want the ball to roll right over them).
     for (const [id, c] of this.activeItems) {
       const dx = s.pos[0] - c.pos[0],
         dy = s.pos[1] - c.pos[1],
         dz = s.pos[2] - c.pos[2];
-      if (dx * dx + dy * dy + dz * dz < PICKUP_RADIUS * PICKUP_RADIUS) {
+      const rad = c.kind === 'case' ? CASE_PICKUP_RADIUS : PICKUP_RADIUS;
+      if (dx * dx + dy * dy + dz * dz < rad * rad) {
         this.activeItems.delete(id);
         this.events.push({ type: 'collect', ball: s.id, item: id });
       }

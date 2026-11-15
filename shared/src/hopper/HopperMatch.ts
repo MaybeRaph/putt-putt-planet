@@ -20,6 +20,7 @@ import {
   type UpgradeId,
 } from './defs';
 import { stageHole } from './generate';
+import { CASES, caseOfItem } from '../cases';
 
 export interface HopperSetup {
   seed: number;
@@ -279,7 +280,11 @@ export class HopperMatch extends Match {
   protected override onCollected(item: string, kind: CollectibleKind): void {
     if (kind === 'coin') this.hs.dust += 1 + this.lv('pouch');
     else if (kind === 'gem') this.hs.dust += 5;
-    else if (kind === 'crate' && this.spec.kind === 'rest' && !this.restClaimed) {
+    else if (kind === 'case') {
+      const id = caseOfItem(item);
+      // Everyone in the run gets one (applyHopperRun banks it for each player at the end).
+      if (id) this.note(`💼 ${CASES[id].name} found! Everyone gets one`, 'epic');
+    } else if (kind === 'crate' && this.spec.kind === 'rest' && !this.restClaimed) {
       const m = /:rest\d:(\w+)$/.exec(item);
       const reward = m?.[1] as RewardId | undefined;
       if (!reward) return;

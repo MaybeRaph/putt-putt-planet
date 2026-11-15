@@ -77,7 +77,7 @@ export const RoomStateSchema = z.object({
 });
 export type RoomState = z.infer<typeof RoomStateSchema>;
 
-const Kind = z.enum(['coin', 'gem', 'golden', 'crate']);
+const Kind = z.enum(['coin', 'gem', 'golden', 'crate', 'case']);
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 const e = <T extends string, S extends z.ZodRawShape = {}>(t: T, shape?: S) =>
   z.object({ type: z.literal(t) }).extend((shape ?? {}) as S);
@@ -154,6 +154,8 @@ export const GrantSchema = z.object({
   newCollectibles: z.array(z.string()),
   /** Planet Hopper stardust banked from this run. */
   dust: num.optional(),
+  /** v1.11: cases found this run (one planet id per case). */
+  cases: z.array(z.string().max(20)).max(64).optional(),
 });
 
 export const S2C = z.discriminatedUnion('t', [

@@ -9,6 +9,8 @@ export interface ControlsHost {
   onShoot(angle: number, power: number): void;
   onAction(action: HostAction): void;
   onAimStart?(): void;
+  /** The player cancelled a shot they were lining up (right click). */
+  onAimCancel?(): void;
 }
 
 export type HostAction = Action | 'pause' | 'scoreboardUp';
@@ -109,6 +111,12 @@ export class Controls {
       this.last.set((a.x + b.x) / 2, (a.y + b.y) / 2);
       return;
     }
+    // Right click while aiming (charging with Space, say) cancels the shot instead of orbiting.
+    if (e.button === 2 && this.aiming) {
+      this.cancelAim();
+      this.host.onAimCancel?.();
+      return;
+    }
     if (this.drag !== 'none') return;
     const nearBall =
       this.screenDistToBall(e.clientX, e.clientY) < Math.max(80, Math.min(innerWidth, innerHeight) * 0.12);
@@ -145,6 +153,12 @@ export class Controls {
       this.orbitBy(e.clientX - this.last.x, e.clientY - this.last.y);
       this.last.set(e.clientX, e.clientY);
     } else if (this.drag === 'aim') {
+      // Right button pressed during a left-drag aim (a chorded press arrives as a move): cancel.
+      if (e.pointerType === 'mouse' && e.buttons & 2) {
+        this.cancelAim();
+        this.host.onAimCancel?.();
+        return;
+      }
       const ball = this.host.ballPos();
       if (!ball) return;
       const g = this.groundPoint(e.clientX, e.clientY, ball.y);

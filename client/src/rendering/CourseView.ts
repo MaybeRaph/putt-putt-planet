@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
+  CASES,
   PHYSICS,
+  caseOfItem,
   computeBounds,
   dirVec,
   kinematicParts,
@@ -1191,8 +1193,50 @@ export class CourseView {
         obj.add(box, rib1, rib2);
         break;
       }
+      case 'case': {
+        // v1.11 hidden case: a little briefcase in its planet's colours, gold trim and handle,
+        // a glowing ring beneath and a faint beam so a sharp eye spots it from across the hole.
+        const def = CASES[caseOfItem(c.id) ?? 'meadow'];
+        obj = new THREE.Group();
+        const shell = new THREE.Mesh(
+          this.own(new RoundedBoxGeometry(0.5, 0.34, 0.2, 3, 0.06)),
+          toon(def.color, { emissive: 0.25 }),
+        );
+        const band = new THREE.Mesh(this.own(new THREE.BoxGeometry(0.52, 0.05, 0.22)), toon('#ffc94d', { emissive: 0.4, metalness: 0.6 }));
+        const latchL = new THREE.Mesh(this.own(new THREE.BoxGeometry(0.06, 0.08, 0.23)), toon('#ffe08a', { emissive: 0.5 }));
+        const latchR = latchL.clone();
+        latchL.position.set(-0.13, 0.11, 0);
+        latchR.position.set(0.13, 0.11, 0);
+        const handle = new THREE.Mesh(
+          this.own(new THREE.TorusGeometry(0.08, 0.022, 8, 16, Math.PI)),
+          toon('#2b2b2b'),
+        );
+        handle.position.y = 0.17;
+        const ring = new THREE.Mesh(
+          this.own(new THREE.TorusGeometry(0.36, 0.03, 8, 40)),
+          new THREE.MeshBasicMaterial({ color: def.color2, transparent: true, opacity: 0.85 }),
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = -0.24;
+        ring.name = 'case-ring';
+        const beam = new THREE.Mesh(
+          this.own(new THREE.CylinderGeometry(0.16, 0.3, 3, 20, 1, true)),
+          new THREE.MeshBasicMaterial({
+            color: def.color2,
+            transparent: true,
+            opacity: 0.18,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        beam.position.y = 1.3;
+        beam.name = 'case-beam';
+        obj.add(shell, band, latchL, latchR, handle, ring, beam);
+        break;
+      }
     }
-    obj.traverse((o) => ((o as THREE.Mesh).castShadow = true));
+    obj.traverse((o) => ((o as THREE.Mesh).castShadow = o.name !== 'case-beam' && o.name !== 'case-ring'));
     obj.position.set(...c.pos);
     this.root.add(obj);
     this.items.set(c.id, { c, obj, base: new THREE.Vector3(...c.pos), taken: false, t: 0 });

@@ -230,6 +230,11 @@ export class AudioEngine {
     else this.tone(800, 0.05, 'triangle', 0.18, { slide: 1.4 });
   }
 
+  /** Case reel: one tick per skin passing the marker (v1.11). */
+  caseTick(pitch = 1): void {
+    this.tone(1500 * pitch, 0.025, 'square', 0.05);
+  }
+
   levelUp(): void {
     [1, 1.25, 1.5, 2, 2.5, 3].forEach((n, i) => this.tone(440 * n, 0.25, 'square', 0.1, { delay: i * 0.08 }));
   }

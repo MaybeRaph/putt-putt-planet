@@ -21,3 +21,4 @@ export * from './hopper/defs';
 export * from './hopper/generate';
 export * from './hopper/HopperMatch';
 export * from './hopper/rewards';
+export * from './cases';

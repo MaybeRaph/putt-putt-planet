@@ -382,6 +382,11 @@ export function item(holeId: string, kind: CollectibleKind, x: number, y: number
   return { id: `${holeId}:${kind}@${x.toFixed(1)},${z.toFixed(1)}`, kind, pos: [x, y + 0.3, z] };
 }
 
+/** A hidden case (v1.11) on a floor point; the id names its planet (see caseOfItem). */
+export function caseItem(holeId: string, planet: string, x: number, y: number, z: number): Collectible {
+  return { id: `${holeId}:case:${planet}@${x.toFixed(1)},${z.toFixed(1)}`, kind: 'case', pos: [x, y + 0.3, z] };
+}
+
 /** A line of coins between two floor points. */
 export function coinLine(holeId: string, a: Vec3, b: Vec3, count: number): Collectible[] {
   const out: Collectible[] = [];

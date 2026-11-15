@@ -5,7 +5,7 @@ import { canvasTexture, dimpleTexture, toon } from './materials';
 const R = PHYSICS.ballRadius;
 
 const skinCache = new Map<string, THREE.Texture>();
-function skinTexture(id: string): THREE.Texture | null {
+export function skinTexture(id: string): THREE.Texture | null {
   const c = COSMETIC_BY_ID.get(id);
   if (!c || !c.pattern || c.pattern === 'solid') return null;
   let t = skinCache.get(id);
@@ -68,10 +68,323 @@ function skinTexture(id: string): THREE.Texture | null {
           ctx.stroke();
         }
         break;
+      default:
+        drawCasePattern(ctx, s, c.pattern ?? 'solid', a, b);
     }
   });
   skinCache.set(id, t);
   return t;
+}
+
+/** v1.11 case-skin patterns (equirectangular: x wraps around the ball, y runs pole to pole). */
+export function drawCasePattern(ctx: CanvasRenderingContext2D, s: number, pattern: string, a: string, b: string): void {
+  // A fixed pseudo-random sequence, so every player sees the same skin.
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  switch (pattern) {
+    case 'gradient': {
+      const g = ctx.createLinearGradient(0, 0, 0, s);
+      g.addColorStop(0, b);
+      g.addColorStop(1, a);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+      break;
+    }
+    case 'rings':
+      for (let i = 0; i < 9; i++) {
+        ctx.fillStyle = i % 2 ? b : a;
+        ctx.fillRect(0, (i * s) / 9, s, s / 9 + 1);
+      }
+      break;
+    case 'sprinkles': {
+      const cols = [b, '#ffffff', '#ffeb3b', '#69f0ae', '#40c4ff'];
+      for (let i = 0; i < 90; i++) {
+        ctx.save();
+        ctx.translate(rnd() * s, rnd() * s);
+        ctx.rotate(rnd() * Math.PI);
+        ctx.fillStyle = cols[i % cols.length];
+        ctx.fillRect(-5, -1.5, 10, 3);
+        ctx.restore();
+      }
+      break;
+    }
+    case 'hex': {
+      ctx.strokeStyle = b;
+      ctx.lineWidth = 3;
+      const r = s / 12;
+      for (let row = -1; row < 9; row++)
+        for (let col = -1; col < 9; col++) {
+          const cx = col * r * 1.75 + (row % 2 ? r * 0.87 : 0),
+            cy = row * r * 1.5;
+          ctx.beginPath();
+          for (let k = 0; k < 6; k++) {
+            const ang = Math.PI / 6 + (k * Math.PI) / 3;
+            ctx.lineTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+      break;
+    }
+    case 'crystal':
+      for (let i = 0; i < 26; i++) {
+        ctx.fillStyle = i % 3 ? b : `${b}99`;
+        ctx.beginPath();
+        const x = rnd() * s,
+          y = rnd() * s,
+          w = 6 + rnd() * 16;
+        ctx.moveTo(x, y - w);
+        ctx.lineTo(x + w * 0.5, y);
+        ctx.lineTo(x, y + w);
+        ctx.lineTo(x - w * 0.5, y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      break;
+    case 'gear':
+      for (let i = 0; i < 7; i++) {
+        const x = rnd() * s,
+          y = rnd() * s,
+          r = 8 + rnd() * 12;
+        ctx.fillStyle = b;
+        ctx.beginPath();
+        for (let k = 0; k < 24; k++) {
+          const ang = (k / 24) * Math.PI * 2;
+          const rr = k % 2 ? r : r * 1.3;
+          ctx.lineTo(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = a;
+        ctx.beginPath();
+        ctx.arc(x, y, r * 0.35, 0, 7);
+        ctx.fill();
+      }
+      break;
+    case 'circuit':
+      ctx.strokeStyle = b;
+      ctx.fillStyle = b;
+      ctx.lineWidth = 2.5;
+      for (let i = 0; i < 18; i++) {
+        let x = Math.round(rnd() * 16) * (s / 16),
+          y = Math.round(rnd() * 16) * (s / 16);
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        for (let k = 0; k < 3; k++) {
+          if (k % 2) y += (rnd() - 0.5) * s * 0.4;
+          else x += (rnd() - 0.5) * s * 0.4;
+          ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, 3.5, 0, 7);
+        ctx.fill();
+      }
+      break;
+    case 'nebula': {
+      for (let i = 0; i < 9; i++) {
+        const x = rnd() * s,
+          y = rnd() * s,
+          r = s * (0.15 + rnd() * 0.25);
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, i % 2 ? `${b}cc` : '#ffffff55');
+        g.addColorStop(1, `${b}00`);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, s, s);
+      }
+      ctx.fillStyle = '#ffffff';
+      for (let i = 0; i < 60; i++) {
+        ctx.globalAlpha = 0.4 + rnd() * 0.6;
+        ctx.fillRect(rnd() * s, rnd() * s, 1.5, 1.5);
+      }
+      ctx.globalAlpha = 1;
+      break;
+    }
+    case 'marble':
+      ctx.strokeStyle = b;
+      for (let i = 0; i < 7; i++) {
+        ctx.lineWidth = 2 + rnd() * 5;
+        ctx.beginPath();
+        let y = rnd() * s;
+        ctx.moveTo(0, y);
+        for (let x = 0; x <= s; x += 8) {
+          y += (rnd() - 0.5) * 12;
+          ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      break;
+    case 'petals': {
+      ctx.fillStyle = b;
+      for (let i = 0; i < 4; i++) {
+        const cx = (i + 0.5) * (s / 4),
+          cy = i % 2 ? s * 0.3 : s * 0.7;
+        for (let k = 0; k < 8; k++) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate((k / 8) * Math.PI * 2);
+          ctx.beginPath();
+          ctx.ellipse(0, -9, 4, 8, 0, 0, 7);
+          ctx.fill();
+          ctx.restore();
+        }
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, 7);
+        ctx.fill();
+      }
+      break;
+    }
+  }
+}
+
+/** Soft round glow sprite (additive), shared by every glowing and mythic ball. */
+let glowTex: THREE.Texture | null = null;
+function glowTexture(): THREE.Texture {
+  if (glowTex) return glowTex;
+  glowTex = canvasTexture(64, (ctx, s) => {
+    const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, s, s);
+  });
+  return glowTex;
+}
+
+/**
+ * Mythic balls: a holographic shell whose pattern drifts and whose glow slides between the
+ * skin's two colours, a breathing aura, sparks orbiting on two tilted rings, and a wake of
+ * stardust while it rolls.
+ */
+class MythicFx {
+  readonly group = new THREE.Group();
+  private readonly aura: THREE.Sprite;
+  private readonly sparks: THREE.Points;
+  /** World-space stardust wake (added to the scene beside the ball, like the trail). */
+  readonly wake: THREE.Points;
+  private readonly life = new Float32Array(48);
+  private readonly vel: THREE.Vector3[] = [];
+  private next = 0;
+  private t = Math.random() * 10;
+  private readonly c1: THREE.Color;
+  private readonly c2: THREE.Color;
+  private readonly white = new THREE.Color('#ffffff');
+  private readonly tmp = new THREE.Color();
+
+  constructor(
+    color: string,
+    color2: string,
+    private readonly mat: THREE.MeshPhysicalMaterial,
+    private readonly map: THREE.Texture | null,
+    ghost: boolean,
+  ) {
+    this.c1 = new THREE.Color(color);
+    this.c2 = new THREE.Color(color2);
+    const additive = { transparent: true, blending: THREE.AdditiveBlending, depthWrite: false } as const;
+    this.aura = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: glowTexture(), color: this.c2, opacity: ghost ? 0.3 : 1, ...additive }),
+    );
+    this.aura.scale.setScalar(R * 7);
+    const sparkGeo = new THREE.BufferGeometry();
+    sparkGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(14 * 3), 3));
+    this.sparks = new THREE.Points(
+      sparkGeo,
+      new THREE.PointsMaterial({ map: glowTexture(), size: 0.12, color: this.c2.clone().lerp(this.white, 0.45), ...additive }),
+    );
+    // A shockwave ring that pulses out across the ground every couple of seconds.
+    this.wave = new THREE.Mesh(
+      new THREE.RingGeometry(R * 0.9, R * 1.25, 40),
+      new THREE.MeshBasicMaterial({ color: this.c2, side: THREE.DoubleSide, opacity: 0, ...additive }),
+    );
+    this.wave.rotation.x = -Math.PI / 2;
+    this.wave.position.y = -R + 0.012;
+    const dustGeo = new THREE.BufferGeometry();
+    dustGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(48 * 3), 3));
+    dustGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(48 * 3), 3));
+    this.wake = new THREE.Points(
+      dustGeo,
+      new THREE.PointsMaterial({ map: glowTexture(), size: 0.07, vertexColors: true, ...additive }),
+    );
+    this.wake.frustumCulled = false;
+    for (let i = 0; i < 48; i++) this.vel.push(new THREE.Vector3());
+    this.group.add(this.aura, this.sparks, this.wave);
+  }
+
+  private readonly wave: THREE.Mesh;
+
+  update(dt: number, worldPos: THREE.Vector3, speed: number, visible: boolean): void {
+    this.t += dt;
+    const t = this.t;
+    // The glow follows the skin's pattern (emissiveMap); its tint slides from white to the accent colour.
+    this.mat.emissive.setRGB(1, 1, 1).lerp(this.c2, 0.35 + 0.35 * Math.sin(t * 1.6));
+    this.mat.emissiveIntensity = 0.55 + 0.4 * Math.sin(t * 3.1) ** 2;
+    if (this.map) this.map.offset.x = (this.map.offset.x + dt * 0.08) % 1;
+    this.mat.iridescenceThicknessRange = [180 + 120 * Math.sin(t), 700 + 200 * Math.cos(t * 0.7)];
+    // Aura breathes.
+    (this.aura.material as THREE.SpriteMaterial).color.copy(this.c2).lerp(this.white, 0.2 + 0.2 * Math.sin(t * 2.2));
+    this.aura.scale.setScalar(R * (6.4 + Math.sin(t * 3) * 0.9));
+    // Shockwave: grows from the ball and fades, every 2.2 s.
+    const ph = (t / 2.2) % 1;
+    this.wave.scale.setScalar(1 + ph * 4.5);
+    (this.wave.material as THREE.MeshBasicMaterial).opacity = (1 - ph) ** 2 * 0.9;
+    // Sparks on two tilted rings, in opposite directions.
+    const sp = this.sparks.geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < 14; i++) {
+      const ring = i % 2;
+      const ang = t * (ring ? 2.6 : -2.1) + (i / 14) * Math.PI * 2;
+      const r = R * (ring ? 1.9 : 2.4);
+      const tilt = ring ? 0.6 : -0.9;
+      const z = Math.sin(ang) * r;
+      sp.setXYZ(i, Math.cos(ang) * r, z * Math.sin(tilt) + R * 0.2, z * Math.cos(tilt));
+    }
+    sp.needsUpdate = true;
+    (this.sparks.material as THREE.PointsMaterial).size = 0.07 + 0.03 * Math.sin(t * 9);
+    // Stardust wake while rolling.
+    const dp = this.wake.geometry.attributes.position as THREE.BufferAttribute;
+    const dc = this.wake.geometry.attributes.color as THREE.BufferAttribute;
+    if (visible && speed > 0.5) {
+      const n = Math.min(3, Math.ceil(speed * dt * 20));
+      for (let j = 0; j < n; j++) {
+        const i = this.next++ % 48;
+        this.life[i] = 0.8;
+        dp.setXYZ(
+          i,
+          worldPos.x + (Math.random() - 0.5) * R,
+          worldPos.y + (Math.random() - 0.3) * R,
+          worldPos.z + (Math.random() - 0.5) * R,
+        );
+        this.vel[i].set((Math.random() - 0.5) * 0.4, 0.5 + Math.random() * 0.6, (Math.random() - 0.5) * 0.4);
+      }
+    }
+    for (let i = 0; i < 48; i++) {
+      if (this.life[i] <= 0) {
+        dc.setXYZ(i, 0, 0, 0);
+        continue;
+      }
+      this.life[i] -= dt;
+      const v = this.vel[i];
+      dp.setXYZ(i, dp.getX(i) + v.x * dt, dp.getY(i) + v.y * dt, dp.getZ(i) + v.z * dt);
+      const k = Math.max(0, this.life[i] / 0.8);
+      this.tmp.copy(this.c1).lerp(this.c2, (i % 5) / 4).lerp(this.white, 0.3);
+      dc.setXYZ(i, this.tmp.r * k, this.tmp.g * k, this.tmp.b * k);
+    }
+    dp.needsUpdate = true;
+    dc.needsUpdate = true;
+    this.group.visible = visible;
+  }
+
+  dispose(): void {
+    this.wake.removeFromParent();
+    this.sparks.geometry.dispose();
+    this.wake.geometry.dispose();
+    (this.sparks.material as THREE.Material).dispose();
+    (this.wake.material as THREE.Material).dispose();
+    (this.aura.material as THREE.Material).dispose();
+    this.wave.geometry.dispose();
+    (this.wave.material as THREE.Material).dispose();
+    this.map?.dispose();
+  }
 }
 
 const hatGeo = new Map<string, THREE.BufferGeometry>();
@@ -276,7 +589,8 @@ export function buildPutter(id: string): THREE.Group {
   const col = c.color,
     col2 = c.color2 ?? '#263238';
   const grp = new THREE.Group();
-  const glow = id === 'putter.neon' || shape === 'star' ? 0.55 : 0;
+  // Neon, star wands and the rarer case putters (v1.11) glow.
+  const glow = id === 'putter.neon' || shape === 'star' ? 0.55 : c.rarity === 'legendary' ? 0.8 : c.rarity === 'epic' ? 0.4 : 0;
   const add = (geo: THREE.BufferGeometry, color: string, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, emissive = 0) => {
     const m = new THREE.Mesh(geo, toon(color, { emissive, metalness: id === 'putter.gold' ? 0.6 : 0 }));
     m.position.set(x, y, z);
@@ -407,6 +721,10 @@ export class BallView {
   private squashDir = new THREE.Vector3(0, 1, 0);
   private putterSwing = 0;
   private hopT = -1;
+  /** Case-skin effects (v1.11). */
+  private mythic: MythicFx | null = null;
+  private glow: THREE.Sprite | null = null;
+  private fxT = 0;
   readonly pos = new THREE.Vector3();
   private lastPos = new THREE.Vector3();
   private heading = 0;
@@ -419,13 +737,28 @@ export class BallView {
   ) {
     const skin = COSMETIC_BY_ID.get(loadout.ball) ?? COSMETIC_BY_ID.get('ball.classic')!;
     const tex = skinTexture(skin.id);
-    // Glossy clear-coated ball with a dimple bump map.
+    const fx = skin.fx;
+    // Mythic shells drift their pattern, so they get their own copy of the (shared) texture.
+    let map = tex;
+    if (fx === 'mythic' && tex) {
+      map = tex.clone();
+      map.wrapS = THREE.RepeatWrapping;
+      map.needsUpdate = true;
+    }
+    // Glossy clear-coated ball with a dimple bump map; case skins add metal, glow or mythic.
     this.bodyMat = new THREE.MeshPhysicalMaterial({
       color: tex ? 0xffffff : skin.color,
-      map: tex,
-      roughness: 0.42,
-      clearcoat: 0.8,
+      map,
+      roughness: fx === 'metal' ? 0.22 : fx === 'mythic' ? 0.18 : 0.42,
+      metalness: fx === 'metal' ? 0.85 : fx === 'mythic' ? 0.25 : 0,
+      clearcoat: fx ? 1 : 0.8,
       clearcoatRoughness: 0.18,
+      iridescence: fx === 'mythic' ? 1 : 0,
+      iridescenceIOR: 1.7,
+      emissive: fx === 'glow' ? new THREE.Color(skin.color2 ?? skin.color) : new THREE.Color(0x000000),
+      // Glowing and mythic skins light up along their own pattern (dark parts stay dark).
+      emissiveMap: fx === 'glow' ? tex : fx === 'mythic' ? map : null,
+      emissiveIntensity: fx === 'glow' ? 0.6 : 0,
       bumpMap: dimpleTexture(),
       bumpScale: 0.6,
       transparent: ghost,
@@ -434,6 +767,23 @@ export class BallView {
     this.body = new THREE.Mesh(new THREE.SphereGeometry(R, 32, 24), this.bodyMat);
     this.body.castShadow = !ghost;
     this.root.add(this.body);
+    if (fx === 'mythic') {
+      this.mythic = new MythicFx(skin.color, skin.color2 ?? '#ffffff', this.bodyMat, map, ghost);
+      this.root.add(this.mythic.group);
+    } else if (fx === 'glow') {
+      this.glow = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: glowTexture(),
+          color: skin.color2 ?? skin.color,
+          transparent: true,
+          opacity: ghost ? 0.2 : 0.45,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      this.glow.scale.setScalar(R * 4);
+      this.root.add(this.glow);
+    }
     this.hat = buildHat(loadout.hat);
     this.hat.position.y = R * 0.85;
     if (ghost) this.hat.traverse((o) => ((o as THREE.Mesh).castShadow = false));
@@ -568,6 +918,16 @@ export class BallView {
     }
     this.root.visible = this.visibleBall && (!holed || this.hopT >= 0);
     this.trail.update(this.root.position, speed, dt, this.root.visible && !holed);
+    if (this.mythic) {
+      // The stardust wake lives in world space, beside the trail.
+      const parent = this.trail.mesh.parent ?? this.root.parent;
+      if (parent && this.mythic.wake.parent !== parent) parent.add(this.mythic.wake);
+      this.mythic.update(reducedMotion ? dt * 0.3 : dt, this.root.position, speed, this.root.visible && !holed);
+    }
+    if (this.glow) {
+      this.fxT += dt;
+      (this.glow.material as THREE.SpriteMaterial).opacity = (this.ghost ? 0.2 : 0.38) + 0.12 * Math.sin(this.fxT * 2.4);
+    }
   }
 
   dispose(): void {
@@ -575,6 +935,8 @@ export class BallView {
     this.body.geometry.dispose();
     this.bodyMat.dispose();
     this.trail.dispose();
+    this.mythic?.dispose();
+    (this.glow?.material as THREE.Material | undefined)?.dispose();
   }
 }
 
@@ -588,6 +950,8 @@ class TrailRibbon {
   private readonly c1: THREE.Color;
   private readonly c2: THREE.Color;
   private readonly rainbow: boolean;
+  /** v1.11 legendary trails: wider, additive, shimmering between their two colours. */
+  private readonly glowing: boolean;
   private readonly enabled: boolean;
   private t = 0;
 
@@ -597,6 +961,7 @@ class TrailRibbon {
     this.c1 = new THREE.Color(c?.color ?? '#ffffff');
     this.c2 = new THREE.Color(c?.color2 ?? c?.color ?? '#ffffff');
     this.rainbow = c?.pattern === 'rainbow';
+    this.glowing = c?.fx === 'glow' || c?.fx === 'mythic';
     this.geo = new THREE.BufferGeometry();
     const n = this.N * 2;
     this.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
@@ -611,6 +976,7 @@ class TrailRibbon {
       vertexColors: true,
       transparent: true,
       opacity: ghost ? 0.4 : 0.85,
+      blending: this.glowing ? THREE.AdditiveBlending : THREE.NormalBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
@@ -647,10 +1013,11 @@ class TrailRibbon {
       dx /= l;
       dz /= l;
       const k = i / (this.N - 1);
-      const w = 0.13 * (1 - k);
+      const w = (this.glowing ? 0.19 : 0.13) * (1 - k);
       pos.setXYZ(i * 2, a.x - dz * w, a.y, a.z + dx * w);
       pos.setXYZ(i * 2 + 1, a.x + dz * w, a.y, a.z - dx * w);
       if (this.rainbow) tmp.setHSL((k * 1.5 + this.t * 0.5) % 1, 0.9, 0.6);
+      else if (this.glowing) tmp.copy(this.c1).lerp(this.c2, 0.5 + 0.5 * Math.sin(this.t * 5 - k * 9));
       else tmp.copy(this.c1).lerp(this.c2, k);
       const alpha = i < n ? (1 - k) * (1 - k) : 0;
       col.setXYZW(i * 2, tmp.r, tmp.g, tmp.b, alpha);

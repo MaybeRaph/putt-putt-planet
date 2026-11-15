@@ -27,6 +27,9 @@ import {
   OMENS,
   dustBalance,
   upgradeRank,
+  CASES,
+  RARITY_INFO,
+  isCaseId,
 } from '@ppp/shared';
 import { WORLD_LABEL, heartsEl, trinketChip } from './HopperHud';
 import type { Game } from '../core/Game';
@@ -40,6 +43,7 @@ import { MenuHero } from './MenuHero';
 import { WorldMap, type WorldInfo } from './WorldMap';
 import type { LocalHost } from '../net/LocalHost';
 import { LINK_QUIET_MS } from '../net/NetClient';
+import { casesScreen, casesToOpen, skinSwatch } from './cases';
 import { APP_VERSION } from '../version';
 
 const WORLD_EMOJI: Record<string, string> = {
@@ -92,9 +96,22 @@ export class Screens {
         'div',
         { class: 'pc-stats' },
         h('span', { class: 'pc-coins' }, `🪙 ${p.coins}`),
+        h(
+          'span',
+          {
+            class: 'pc-dust',
+            title: 'Stardust: earned on Planet Hopper runs, spent in the Clubhouse and on case keys',
+          },
+          `✨ ${dustBalance(p.hopper)}`,
+        ),
         h('span', { class: 'pc-stars' }, `⭐ ${starsTotal(p)}`),
       ),
     );
+  }
+
+  /** v1.11 Cases: cases found on Planet Hopper holes, opened with stardust keys. */
+  cases(back: () => void = () => this.mainMenu()): void {
+    casesScreen(this.game, (t, b) => this.header(t, b), back);
   }
 
   // ------------------------------------------------------------------------------------------
@@ -127,17 +144,7 @@ export class Screens {
     const el = h(
       'div',
       { class: 'screen main-menu' },
-      h(
-        'div',
-        { class: 'mm-top' },
-        h(
-          'div',
-          { class: 'logo', 'aria-label': 'Putt-Putt Planet' },
-          h('span', { class: 'l1' }, 'Putt-Putt'),
-          h('span', { class: 'l2' }, 'Planet'),
-        ),
-        this.profileChip(),
-      ),
+      h('div', { class: 'mm-top' }, this.profileChip()),
       h(
         'div',
         { class: 'mm-body' },
@@ -153,6 +160,13 @@ export class Screens {
         h(
           'div',
           { class: 'mm-actions' },
+          // The title sits right above the buttons (v1.11), not up in the corner.
+          h(
+            'div',
+            { class: 'logo', 'aria-label': 'Putt-Putt Planet' },
+            h('span', { class: 'l1' }, 'Putt-Putt'),
+            h('span', { class: 'l2' }, 'Planet'),
+          ),
           mega(
             'sun',
             '⛳',
@@ -162,22 +176,33 @@ export class Screens {
             0,
           ),
           mega('grape hopper-btn', '🪐', 'Planet Hopper', 'roguelike run', () => this.clubhouse(), 1),
+          (() => {
+            const n = casesToOpen(g);
+            return mega(
+              'amber cases-btn',
+              '💼',
+              'Cases',
+              n ? `${n} case${n === 1 ? '' : 's'} to open!` : 'keys · skins · stardust',
+              () => this.cases(),
+              2,
+            );
+          })(),
           mega(
             'sky',
             '👥',
             'Play with Friends',
             `up to ${RULES.maxPlayers} players`,
             () => this.multiplayer(),
-            2,
+            3,
           ),
-          mega('pink', '📅', 'Daily Challenge', 'a new hole every day', () => this.daily(), 3),
+          mega('pink', '📅', 'Daily Challenge', 'a new hole every day', () => this.daily(), 4),
           h(
             'div',
             { class: 'mm-tiles' },
-            tile('🎽', 'Locker', () => this.locker(), 4),
-            tile('💎', 'Collection', () => this.collection(), 5),
-            tile('🏅', 'Profile', () => this.profileScreen(), 6),
-            tile('⚙️', 'Settings', () => this.settings(() => this.mainMenu()), 7),
+            tile('🎽', 'Locker', () => this.locker(), 5),
+            tile('💎', 'Collection', () => this.collection(), 6),
+            tile('🏅', 'Profile', () => this.profileScreen(), 7),
+            tile('⚙️', 'Settings', () => this.settings(() => this.mainMenu()), 8),
           ),
         ),
       ),
@@ -190,7 +215,7 @@ export class Screens {
           { class: 'footer-hint' },
           matchMedia('(pointer: coarse)').matches
             ? 'Drag back from the ball to putt · drag elsewhere to look around · pinch to zoom'
-            : 'Drag back from the ball to putt · Space to charge · right-drag to orbit · T overview',
+            : 'Drag back from the ball to putt · Space to charge · right-click cancels · right-drag to orbit · T overview',
         ),
         // Desktop app only: a browser tab can't close itself, and iOS apps don't quit themselves.
         window.pppNative?.quit
@@ -1240,6 +1265,8 @@ export class Screens {
           return `🏅 ${achievementName(c.unlock.id)}`;
         case 'crate':
           return '🎁 Mystery crates';
+        case 'case':
+          return `💼 ${CASES[c.unlock.case].name}`;
         default:
           return '';
       }
@@ -1274,7 +1301,8 @@ export class Screens {
         const card = h(
           'button',
           {
-            class: `item ${owned ? 'owned' : 'locked'} ${equipped ? 'equipped' : ''}`,
+            class: `item ${owned ? 'owned' : 'locked'} ${equipped ? 'equipped' : ''} ${c.rarity ? `rar r-${c.rarity}` : ''}`,
+            style: c.rarity ? `--rc:${RARITY_INFO[c.rarity].color}` : undefined,
             onclick: () => {
               if (owned) {
                 g.profile.equip(c.slot, c.id);
@@ -1302,10 +1330,12 @@ export class Screens {
               }
             },
           },
-          h('i', {
-            class: `swatch big pat-${c.pattern ?? 'solid'}`,
-            style: `background:${c.pattern === 'rainbow' ? 'linear-gradient(90deg,#ff5252,#ffeb3b,#69f0ae,#40c4ff,#e040fb)' : c.color2 ? `linear-gradient(135deg, ${c.color} 50%, ${c.color2} 50%)` : c.color}`,
-          }),
+          c.unlock.type === 'case'
+            ? skinSwatch(c, 48)
+            : h('i', {
+                class: `swatch big pat-${c.pattern ?? 'solid'}`,
+                style: `background:${c.pattern === 'rainbow' ? 'linear-gradient(90deg,#ff5252,#ffeb3b,#69f0ae,#40c4ff,#e040fb)' : c.color2 ? `linear-gradient(135deg, ${c.color} 50%, ${c.color2} 50%)` : c.color}`,
+              }),
           h('div', { class: 'item-name' }, c.name),
           h('div', { class: 'item-sub' }, equipped ? '✓ Equipped' : owned ? 'Owned' : unlockText(c)),
         );
@@ -2006,6 +2036,16 @@ export class Screens {
             ? [
                 grant.dust !== undefined
                   ? h('div', { class: 'res-dust' }, `✨ ${grant.dust} stardust banked in the Clubhouse`)
+                  : null,
+                grant.cases?.length
+                  ? h(
+                      'button',
+                      { class: 'btn res-cases', onclick: () => this.cases(() => this.mainMenu()) },
+                      `💼 ${grant.cases
+                        .filter(isCaseId)
+                        .map((id) => CASES[id].name)
+                        .join(', ')} found! Open it in Cases ▶`,
+                    )
                   : null,
                 h(
                   'div',

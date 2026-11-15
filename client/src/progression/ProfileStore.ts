@@ -2,7 +2,11 @@ import {
   applyRun,
   applyHopperRun,
   buyUpgrade,
+  buyCaseKey,
+  openCase,
   setKeepsake,
+  type CaseId,
+  type CaseOpening,
   type HopperMatch,
   type UpgradeId,
   buyCosmetic,
@@ -127,6 +131,24 @@ export class ProfileStore {
     if (typeof r === 'string') return r;
     this.replace(r);
     return null;
+  }
+
+  /** Buy a key for a case with stardust (v1.11). */
+  buyCaseKey(id: CaseId): string | null {
+    const r = buyCaseKey(this.profile, id);
+    if (typeof r === 'string') return r;
+    this.replace(r);
+    return null;
+  }
+
+  /** Open a case with a key. The result is saved at once; the reel only shows it. */
+  openCase(id: CaseId): CaseOpening | string {
+    const u = new Uint32Array(2);
+    crypto.getRandomValues(u);
+    const r = openCase(this.profile, id, u[0] / 2 ** 32, u[1] / 2 ** 32);
+    if (typeof r === 'string') return r;
+    this.replace(r.profile);
+    return r;
   }
 
   setKeepsake(id: string | null): void {

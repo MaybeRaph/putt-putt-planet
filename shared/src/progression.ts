@@ -1,7 +1,8 @@
 import { COINS, WORLD_GATES, XP, xpToNext } from './config';
 import { COSMETICS, COSMETIC_BY_ID } from './cosmetics';
 import { ACHIEVEMENTS, ACHIEVEMENT_BY_ID } from './achievements';
-import { starsTotal, type Profile } from './profile';
+import { defaultCases, starsTotal, type Profile } from './profile';
+import { caseOfItem } from './cases';
 import type { Course, CollectibleKind } from './schema';
 import type { GameMode, HoleResult, Match } from './match/Match';
 import { hashString } from './rng';
@@ -41,6 +42,8 @@ export interface Grant {
   newCollectibles: string[];
   /** Planet Hopper stardust banked from this run. */
   dust?: number;
+  /** Cases found this run (one planet id per case). */
+  cases?: string[];
 }
 
 export function buildRunSummary(
@@ -187,11 +190,18 @@ export function applyRun(
   coins('Holes-in-one', aces * COINS.holeInOne);
 
   // --- collectibles (shared: everyone present gets them)
-  const counts = { coin: 0, gem: 0, golden: 0, crate: 0 };
+  const counts = { coin: 0, gem: 0, golden: 0, crate: 0, case: 0 };
   let dupCoins = 0;
   for (const c of run.collected) {
     counts[c.kind]++;
-    if (c.kind === 'gem' || c.kind === 'golden') {
+    if (c.kind === 'case') {
+      // Like every pickup in a shared game, a case found by anyone goes to everyone.
+      const id = caseOfItem(c.item);
+      if (!id) continue;
+      p.cases ??= defaultCases();
+      p.cases.found[id] = (p.cases.found[id] ?? 0) + 1;
+      (grant.cases ??= []).push(id);
+    } else if (c.kind === 'gem' || c.kind === 'golden') {
       if (!p.collected.includes(c.item)) {
         p.collected.push(c.item);
         grant.newCollectibles.push(c.item);

@@ -32,7 +32,9 @@ import {
   funnel,
   riser,
   ringWall,
+  caseItem,
 } from '../courses/builder';
+import { CASE_SPAWN_CHANCE, isCaseId } from '../cases';
 import { hashString, pick, range, rng } from '../rng';
 import { MAX_DEPTH, countLevel, type OmenId, type RewardId, type StageSpec, type TrinketId } from './defs';
 
@@ -81,7 +83,7 @@ export function worldTheme(world: string): Theme {
 const lv = (spec: StageSpec, t: TrinketId) => countLevel(spec.shaping, t);
 
 /** Hole for one stage of a run. */
-export function stageHole(seed: number, index: number, spec: StageSpec): Hole {
+export function stageHole(seed: number, index: number, spec: StageSpec, caseChance = CASE_SPAWN_CHANCE): Hole {
   const input = spec.kind === 'rest' ? restHole(seed, index, spec) : golfHole(seed, index, spec);
   // Storm Compass softens omens by level; at Lv3 they have no effect at all.
   const g = lv(spec, 'compass');
@@ -142,7 +144,205 @@ export function stageHole(seed: number, index: number, spec: StageSpec): Hole {
     default:
       break;
   }
-  return HoleSchema.parse({ ...input, theme, cupScale, powerScale, wind, gravityScale });
+  const collectibles = hideCase(seed, index, spec, input, caseChance);
+  return HoleSchema.parse({ ...input, collectibles, theme, cupScale, powerScale, wind, gravityScale });
+}
+
+/**
+ * v1.11: now and then (CASE_SPAWN_CHANCE per golf stage) a stage hides a case from its planet.
+ * It's a pure function of the run seed and stage, so every player in a run gets the same case in
+ * the same place. Where: a gem's spot when the hole has one (the generator already puts gems
+ * somewhere that takes a deliberate shot: an island, the far lane of a fork, a ledge), otherwise
+ * a boxed-in spot on the green well off the line (a corner, a pocket; see offLineSpot).
+ */
+export function hideCase(
+  seed: number,
+  index: number,
+  spec: StageSpec,
+  input: ReturnType<typeof golfHole>,
+  chance = CASE_SPAWN_CHANCE,
+): Collectible[] {
+  const cols = (input.collectibles ?? []) as Collectible[];
+  if (spec.kind === 'rest') return cols;
+  const r = rng(hashString(`hop-case:${seed}:${index}`));
+  if (r() >= chance) return cols;
+  const planet = isCaseId(spec.world) ? spec.world : 'meadow';
+  const gems = cols.filter((c) => c.kind === 'gem');
+  if (gems.length) {
+    const g = gems[Math.floor(r() * gems.length)];
+    return [...cols.filter((c) => c !== g), caseItem(input.id, planet, g.pos[0], g.pos[1] - 0.3, g.pos[2])];
+  }
+  const spot = offLineSpot(input, cols, r);
+  return spot ? [...cols, caseItem(input.id, planet, spot[0], spot[1], spot[2])] : cols;
+}
+
+/**
+ * How hidden-case spots off the line are chosen: distance bands from the line to try in turn,
+ * and how much a spot boxed in by rails or the edge of the green counts (a corner you have to
+ * bank or creep into).
+ */
+export interface CaseSpotStyle {
+  bands: [number, number][];
+  tuck: number;
+}
+/** v1.11 as shipped: well off the line, tucked into corners. */
+export const TUCKED_SPOTS: CaseSpotStyle = {
+  bands: [
+    [1.5, 3.4],
+    [0.9, 2.6],
+    // Last resort, so a stage that rolled a case nearly always gets one.
+    [0.5, 3.2],
+  ],
+  tuck: 0.8,
+};
+/** The first cut (edge of the green, nearest band first); kept to compare against. */
+export const EDGE_SPOTS: CaseSpotStyle = {
+  bands: [
+    [0.9, 2.6],
+    [0.5, 3.2],
+  ],
+  tuck: 0,
+};
+
+/** A flat floor point on the route (clear of blocks, zones and moving parts) well off the line. */
+export function offLineSpot(
+  input: ReturnType<typeof golfHole>,
+  cols: Collectible[],
+  r: () => number,
+  style: CaseSpotStyle = TUCKED_SPOTS,
+): Vec3 | null {
+  const solids = (input.solids ?? []) as Solid[];
+  const path = (input.path ?? []) as Vec3[];
+  const tee = input.tee as Vec3;
+  const cup = input.cup as Vec3;
+  const floors = solids.filter(
+    (s) => s.role === 'floor' && s.shape === 'box' && Math.abs(s.rot?.[0] ?? 0) < 0.01 && Math.abs(s.rot?.[2] ?? 0) < 0.01,
+  );
+  const blocks = solids.filter((s) => s.role !== 'floor');
+  const zones = (input.zones ?? []) as Zone[];
+  const moving: Vec3[] = [];
+  for (const o of (input.obstacles ?? []) as Obstacle[])
+    for (const v of Object.values(o))
+      if (Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number')) moving.push(v as Vec3);
+  const toLocal = (s: { center: Vec3; rot?: Vec3 }, x: number, z: number): [number, number] => {
+    const a = -(s.rot?.[1] ?? 0);
+    const dx = x - s.center[0],
+      dz = z - s.center[2];
+    return [dx * Math.cos(a) + dz * Math.sin(a), -dx * Math.sin(a) + dz * Math.cos(a)];
+  };
+  const inside = (s: { center: Vec3; size: Vec3; rot?: Vec3 }, x: number, z: number, pad: number) => {
+    const [u, v] = toLocal(s, x, z);
+    return Math.abs(u) < s.size[0] / 2 + pad && Math.abs(v) < s.size[2] / 2 + pad;
+  };
+  const offLine = (x: number, z: number) => {
+    let best = Infinity;
+    for (let i = 0; i + 1 < path.length; i++) {
+      const [ax, , az] = path[i],
+        [bx, , bz] = path[i + 1];
+      const vx = bx - ax,
+        vz = bz - az;
+      const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz || 1)));
+      best = Math.min(best, Math.hypot(x - (ax + vx * t), z - (az + vz * t)));
+    }
+    return best;
+  };
+  // Only floor the route itself runs over: a piece of green the ball can't get onto (an island
+  // reached by a leap the line doesn't take, a disconnected ledge) is no good.
+  const route: Vec3[] = [];
+  for (let i = 0; i + 1 < path.length; i++) {
+    const [a, b] = [path[i], path[i + 1]];
+    const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[2] - a[2]) / 0.5));
+    for (let k = 0; k <= n; k++)
+      route.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n, a[2] + ((b[2] - a[2]) * k) / n]);
+  }
+  const onRoute = floors.filter((f) => {
+    const top = f.center[1] + f.size[1] / 2;
+    return route.some((p) => Math.abs(p[1] - top) < 0.8 && inside(f, p[0], p[2], 0));
+  });
+  /** Rail or block at ball height around (x, z)? */
+  const blocked = (x: number, z: number, top: number, pad: number) =>
+    blocks.some(
+      (b) =>
+        b.center[1] + b.size[1] / 2 > top + 0.05 &&
+        b.center[1] - b.size[1] / 2 < top + 0.6 &&
+        (b.shape === 'cylinder'
+          ? Math.hypot(b.center[0] - x, b.center[2] - z) < b.size[0] / 2 + pad
+          : b.shape === 'box' && inside(b, x, z, pad)),
+    );
+  /** Green underfoot at (x, z), within a step of `top`? */
+  const floorAt = (x: number, z: number, top: number) =>
+    floors.some((f) => Math.abs(f.center[1] + f.size[1] / 2 - top) < 0.3 && inside(f, x, z, 0));
+  /**
+   * In play: a straight roll from the nearest point of the route stays on the green the whole
+   * way without meeting a rail. (A fairway's floor slab runs out under its rails, so without this
+   * a spot could land on the far side of a wall, out in the grass.)
+   */
+  const reachable = (x: number, z: number, top: number) => {
+    let near: Vec3 | null = null;
+    let nd = Infinity;
+    for (const p of route) {
+      if (Math.abs(p[1] - top) > 0.6) continue;
+      const d = Math.hypot(p[0] - x, p[2] - z);
+      if (d < nd) {
+        nd = d;
+        near = p;
+      }
+    }
+    if (!near) return false;
+    const steps = Math.max(1, Math.ceil(nd / 0.2));
+    for (let k = 0; k <= steps; k++) {
+      const sx = near[0] + ((x - near[0]) * k) / steps,
+        sz = near[2] + ((z - near[2]) * k) / steps;
+      if (!floorAt(sx, sz, top) || blocked(sx, sz, top, 0.08)) return false;
+    }
+    return true;
+  };
+  /** How boxed in a spot is: of 8 directions, how many meet a rail or the edge of the green within 0.75 m. */
+  const tucked = (x: number, z: number, top: number) => {
+    let n = 0;
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const sx = x + Math.cos(a) * 0.75,
+        sz = z + Math.sin(a) * 0.75;
+      if (!floorAt(sx, sz, top) || blocked(sx, sz, top, 0.08)) n++;
+    }
+    return n;
+  };
+  // Off the line by enough that it takes a deliberate shot (round a corner, into a pocket), not
+  // so far that it's out of play; the most boxed-in such spot wins. Each band is tried in turn.
+  const search = (minD: number, maxD: number): Vec3 | null => {
+    let best: { p: Vec3; score: number } | null = null;
+    for (const f of onRoute) {
+      const top = f.center[1] + f.size[1] / 2;
+      const m = 0.55;
+      for (let u = -f.size[0] / 2 + m; u <= f.size[0] / 2 - m + 1e-6; u += 0.5)
+        for (let v = -f.size[2] / 2 + m; v <= f.size[2] / 2 - m + 1e-6; v += 0.5) {
+          const a = f.rot?.[1] ?? 0;
+          const x = f.center[0] + u * Math.cos(a) - v * Math.sin(a);
+          const z = f.center[2] + u * Math.sin(a) + v * Math.cos(a);
+          if (Math.hypot(x - tee[0], z - tee[2]) < 3 || Math.hypot(x - cup[0], z - cup[2]) < 2.5) continue;
+          if (cols.some((c) => Math.hypot(c.pos[0] - x, c.pos[2] - z) < 1.2)) continue;
+          if (moving.some((p) => Math.hypot(p[0] - x, p[2] - z) < 1.5)) continue;
+          if (zones.some((zn) => inside({ center: zn.center, size: zn.size, rot: [0, zn.rotY ?? 0, 0] }, x, z, 0.4)))
+            continue;
+          // Clear of rails and blocks at ball height.
+          if (blocked(x, z, top, 0.4)) continue;
+          // Not under another floor (an overpass hides it).
+          if (floors.some((o) => o !== f && o.center[1] + o.size[1] / 2 > top + 0.05 && inside(o, x, z, 0))) continue;
+          const d = offLine(x, z);
+          if (d < minD || d > maxD) continue;
+          if (!reachable(x, z, top)) continue;
+          const score = (style.tuck ? d * 0.6 + style.tuck * tucked(x, z, top) : d) + r() * 0.3;
+          if (!best || score > best.score) best = { p: [x, top, z], score };
+        }
+    }
+    return best?.p ?? null;
+  };
+  for (const [lo, hi] of style.bands) {
+    const p = search(lo, hi);
+    if (p) return p;
+  }
+  return null;
 }
 
 /** Slick Greens surface by Storm Compass level (0 = no compass). */
