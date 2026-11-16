@@ -30,7 +30,7 @@
 | v1.9.0 funnels, fair wormholes, spectator switching, Chaos in Planet Hopper, harder small-team runs, boss holes must be holed, scenery that fades and stays off the course, faster corkscrews, smooth bumps, hitch-free intro | ✅ done (see below) |
 | v1.10.0 UI visual overhaul: toybox identity for every screen and the HUD, 3D ball, hat and putter on the main menu, world-map Play Solo | ✅ done (see below) |
 | v1.11.0 cases: hidden Planet Hopper cases, stardust keys, opening reel, 40 case-only skins with rarities, stardust on the menu | ✅ done (see below) |
-| v1.12.0 Planet Hopper prestige, rest-stop shop, curses, combos, 6 trinkets, host-only keepsake, 1/13 cases; ball stickers; stat awards; ace replays; photo mode; HUD size | ✅ done, not released (see below) |
+| v1.12.0 Planet Hopper prestige, rest-stop shop, curses, combos, 6 trinkets, host-only keepsake, 1/13 cases; ball stickers; stat awards; ace replays; photo mode; HUD size | ✅ released ([v1.12.0](https://github.com/MaybeRaph/putt-putt-planet/releases/tag/v1.12.0)) |
 
 **Next steps (not started):** real accounts/auth; persist rooms across server restarts; switch the client to the non-`compat` Rapier build (separate .wasm, ~1 MB smaller download); optional outline pass; hand-tuned pars from playtesting with humans (current pars are designer estimates, sanity-checked by the solver).
 
@@ -75,7 +75,7 @@
 - Bug bash fixes: Esc couldn't resume (controls disabled while paused); solo sim kept running while paused; three r187 shadow-map deprecation.
 - Production: vendor chunk split (app 94 KB gz, three 150 KB, rapier 1.67 MB), inline boot splash for instant first paint, single-process server (static + ws), path-traversal guarded, standalone server bundle verified from an empty dir. Dockerfile written (Docker not installed on the dev machine, so the image build itself is untested).
 
-## v1.12.0 — prestige, shop, curses and combos, stickers, awards, replays, photo mode (done, not released yet)
+## v1.12.0 — prestige, shop, curses and combos, stickers, awards, replays, photo mode (released)
 
 Asked for by Lucas and Raph. Everything Planet Hopper that changes the rules is in `shared/` (the host decides; clients rebuild holes from the stage spec, so anything that changes a hole rides in the spec).
 
