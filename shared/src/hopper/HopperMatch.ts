@@ -3,15 +3,28 @@ import { Match, type ScoreState } from '../match/Match';
 import type { CollectibleKind } from '../schema';
 import { hashString, rng } from '../rng';
 import {
-  MAX_TRINKET_LEVEL,
+  JITTER_DEGREES,
+  MAX_DEPTH,
+  NEXT_HOLE_POWERUPS,
   OMEN_IDS,
+  POWERUPS,
+  PRESTIGE,
   SKELETON,
   TRINKETS,
   TRINKET_IDS,
   UPGRADES,
   UPGRADE_IDS,
+  COMBOS,
+  activeCombos,
+  isCurse,
   isTrinket,
+  loopOf,
+  maxLevelOf,
+  sellPrice,
+  skeletonAt,
   type ChoiceOption,
+  type ComboId,
+  type PowerupId,
   type HopperState,
   type OmenId,
   type RewardId,
@@ -27,14 +40,17 @@ export interface HopperSetup {
   players: { id: string; name: string }[];
   /** Clubhouse upgrades of the player who started the run. */
   upgrades: Record<string, number>;
-  /** Every player's equipped keepsake joins the team's trinkets. */
+  /**
+   * Keepsakes: v1.12 only the host's (the first entry) is used. Every player bringing one made
+   * big co-op teams start with a pile of trinkets, which was far too easy.
+   */
   keepsakes: (string | null | undefined)[];
   /** Chaos mode: balls collide with each other. */
   chaos?: boolean;
 }
 
 /** Trinkets that change the hole itself (baked into the generated geometry/physics). */
-const SHAPING: TrinketId[] = ['magnet', 'glove', 'socks', 'compass'];
+const SHAPING: TrinketId[] = ['magnet', 'glove', 'socks', 'compass', 'laser', 'lucky', 'jitter', 'lantern'];
 const VOTE_SECONDS = 25;
 /**
  * Co-op votes with more than two connected players: once a strict majority of them is on one
@@ -59,6 +75,8 @@ export const GIMME_RANGE = [0, 0.9, 1.3, 1.7];
 const LEVEL_UP_WEIGHT = [1, 0.08, 0.03, 0];
 /** Draft weight of a rare trinket relative to a common one. */
 const RARE_WEIGHT = 0.25;
+/** Draft weight of a cursed trinket (at most one per draft). */
+const CURSE_WEIGHT = 0.35;
 const REST_REWARDS: RewardId[] = ['heal', 'dust', 'trinket', 'vitality', 'gamble'];
 /**
  * Small teams (1–2 players) play by harder heart rules (v1.9; a fully upgraded solo player won
@@ -85,7 +103,8 @@ export function runWorlds(seed: number): string[] {
 
 /** Depth (difficulty step) of a stage: golf stages before it. */
 export function stageDepth(index: number): number {
-  return SKELETON.slice(0, index).filter((s) => s.kind !== 'rest').length;
+  const pos = index % SKELETON.length;
+  return SKELETON.slice(0, pos).filter((s) => s.kind !== 'rest').length;
 }
 
 /**
@@ -111,7 +130,7 @@ export class HopperMatch extends Match {
   readonly worlds: string[];
   readonly upgrades: Record<string, number>;
   readonly hs: HopperState;
-  private queue: ('trinket' | 'route')[] = [];
+  private queue: ('trinket' | 'route' | 'prestige')[] = [];
   private optionSpecs: StageSpec[] = [];
   private nextSpec: StageSpec | null = null;
   private choiceTimer = 0;
@@ -121,6 +140,8 @@ export class HopperMatch extends Match {
   private restClaimed = false;
   private pendingEnd: 'won' | 'lost' | null = null;
   private lostToBoss = false;
+  /** Hot Streak: holes in a row the whole team finished at par or better. */
+  private streak = 0;
 
   constructor(setup: HopperSetup) {
     super({ mode: 'hopper', holes: [], players: setup.players, holeEndDelay: 3.5, chaos: !!setup.chaos });
@@ -143,9 +164,16 @@ export class HopperMatch extends Match {
       choice: null,
       lastDelta: null,
       result: 'running',
+      prestige: 0,
+      coins: 0,
+      coinsEarned: 0,
+      coinsSpent: 0,
+      shopLog: [],
+      boosts: [],
     };
-    // Matching keepsakes in co-op stack: the second copy levels the trinket up.
-    for (const k of setup.keepsakes) if (isTrinket(k)) this.addTrinket(k, false);
+    // v1.12: only the host's keepsake joins the run.
+    const keepsake = setup.keepsakes[0];
+    if (isTrinket(keepsake) && !isCurse(keepsake)) this.addTrinket(keepsake, false);
     const first = this.makeSpec(0, null, 'dust', 0);
     this.hs.stages.push(first);
     this.cfg.holes.push(stageHole(this.seed, 0, first));
@@ -165,9 +193,28 @@ export class HopperMatch extends Match {
     return this.hs.trinkets.includes(t);
   }
 
-  /** Run level of a trinket: 0 = not owned, else 1..3. */
+  /** Run level of a trinket: 0 = not owned, else 1..3 (curses: 1). */
   lv(t: TrinketId): number {
-    return this.has(t) ? Math.min(MAX_TRINKET_LEVEL, this.hs.levels[t] ?? 1) : 0;
+    return this.has(t) ? Math.min(maxLevelOf(t), this.hs.levels[t] ?? 1) : 0;
+  }
+
+  combo(c: ComboId): boolean {
+    return COMBOS[c].needs.every((t) => this.has(t));
+  }
+
+  /** Prestige loop of the current stage (0 = first time round). */
+  get loop(): number {
+    return loopOf(this.hs.stage);
+  }
+
+  /** Planet order for a prestige loop (the first loop keeps the run's own order). */
+  worldsFor(loop: number): string[] {
+    return loop === 0 ? this.worlds : runWorlds(this.seed + loop * 7919);
+  }
+
+  /** Stardust gained (the Glass Cannon doubles it). */
+  private addDust(n: number): void {
+    this.hs.dust += this.has('glass') ? n * 2 : n;
   }
 
   /** Shaping list for a stage spec: one copy per level of each hole-shaping trinket. */
@@ -188,17 +235,20 @@ export class HopperMatch extends Match {
   }
 
   makeSpec(index: number, omen: OmenId | null, reward: RewardId | null, variant: number): StageSpec {
-    const sk = SKELETON[index];
+    const sk = skeletonAt(index);
+    const loop = loopOf(index);
     const spec: StageSpec = {
       kind: sk.kind,
       sector: sk.sector,
-      world: this.worlds[sk.sector],
-      depth: stageDepth(index),
+      world: this.worldsFor(loop)[sk.sector],
+      // Prestige loops start harder and reach the hardest holes sooner.
+      depth: Math.min(MAX_DEPTH, stageDepth(index) + PRESTIGE.depthPerLoop * loop),
       variant,
       omen,
       reward,
       shaping: this.shaping(),
     };
+    if (loop > 0) spec.loop = loop;
     if (sk.kind === 'rest') {
       const r = rng(hashString(`rest:${this.seed}:${index}`));
       const pool = [...REST_REWARDS];
@@ -230,7 +280,8 @@ export class HopperMatch extends Match {
           : 4;
     const overtime = [0, 3, 5, 7][this.lv('overtime')];
     const moth = [0, 0, 2, 4][this.lv('moth')];
-    return par + base + overtime + moth;
+    const extra = this.spec.boosts?.includes('strokes') ? 3 : 0;
+    return par + base + overtime + moth + extra;
   }
 
   override startHole(index: number): void {
@@ -241,8 +292,10 @@ export class HopperMatch extends Match {
     this.hs.lastDelta = null;
     const spec = this.spec;
     if (spec.kind === 'rest') {
-      this.heal(1);
-      this.note('🌿 Rest stop — the team catches its breath (+1 ❤️)', 'good');
+      const n = 1 + this.lv('hourglass');
+      this.heal(n);
+      this.note(`🌿 Rest stop — the team catches its breath (+${n} ❤️)`, 'good');
+      if (this.hs.coins > 0) this.note(`🛒 The shop is open: ${this.hs.coins} coins to spend`, 'info');
     } else if (spec.kind === 'boss') this.note(`☠️ Boss hole: ${this.hole.name}`, 'epic');
     this.changed();
   }
@@ -278,8 +331,14 @@ export class HopperMatch extends Match {
   }
 
   protected override onCollected(item: string, kind: CollectibleKind): void {
-    if (kind === 'coin') this.hs.dust += 1 + this.lv('pouch');
-    else if (kind === 'gem') this.hs.dust += 5;
+    if (kind === 'coin') {
+      const jackpot = this.combo('jackpot') ? 1 : 0;
+      this.addDust(1 + this.lv('pouch') + jackpot);
+      const coins =
+        1 + this.lv('piggy') + (this.has('greed') ? 2 : 0) + jackpot + PRESTIGE.coinPerLoop * this.loop;
+      this.hs.coins += coins;
+      this.hs.coinsEarned += coins;
+    } else if (kind === 'gem') this.addDust(5);
     else if (kind === 'case') {
       const id = caseOfItem(item);
       // Everyone in the run gets one (applyHopperRun banks it for each player at the end).
@@ -306,9 +365,10 @@ export class HopperMatch extends Match {
 
   /** Gain a trinket, or level it up if the team already has it. */
   private addTrinket(t: TrinketId, announce = true): void {
+    const before = activeCombos(this.hs.trinkets);
     if (this.has(t)) {
       const lv = this.lv(t);
-      if (lv >= MAX_TRINKET_LEVEL) return;
+      if (lv >= maxLevelOf(t)) return;
       this.hs.levels[t] = lv + 1;
       if (announce) this.note(`⬆️ ${TRINKETS[t].icon} ${TRINKETS[t].name} Lv${lv + 1}!`, 'epic');
     } else {
@@ -320,6 +380,87 @@ export class HopperMatch extends Match {
       this.hs.maxHearts += 2;
       this.heal(2);
     }
+    if (t === 'glass' && this.lv(t) === 1) this.setMax(this.hs.maxHearts - 2);
+    for (const c of activeCombos(this.hs.trinkets))
+      if (!before.includes(c)) {
+        if (c === 'fortress') {
+          this.hs.maxHearts += 2;
+          this.heal(2);
+        }
+        if (announce) this.note(`${COMBOS[c].icon} Combo: ${COMBOS[c].name}!`, 'epic');
+      }
+  }
+
+  /** Change max hearts (never below 1), keeping hearts within it. */
+  private setMax(n: number): void {
+    this.hs.maxHearts = Math.max(1, n);
+    this.hs.hearts = Math.min(this.hs.hearts, this.hs.maxHearts);
+  }
+
+  /** Sell (lose) a trinket: undo what it added to max hearts, and any combo it broke. */
+  private removeTrinket(t: TrinketId): void {
+    if (!this.has(t)) return;
+    const lv = this.lv(t);
+    const before = activeCombos(this.hs.trinkets);
+    this.hs.trinkets = this.hs.trinkets.filter((x) => x !== t);
+    delete this.hs.levels[t];
+    let max = this.hs.maxHearts;
+    if (t === 'ironheart') max -= 2 * lv;
+    if (t === 'glass') max += 2;
+    const after = activeCombos(this.hs.trinkets);
+    if (before.includes('fortress') && !after.includes('fortress')) max -= 2;
+    this.setMax(max);
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // v1.12 rest-stop shop (team coins picked up this run)
+  // ------------------------------------------------------------------------------------------
+
+  /** Is the shop open (the team is at a rest stop and the run is on)? */
+  get shopOpen(): boolean {
+    return this.spec?.kind === 'rest' && this.hs.result === 'running' && this.phase !== 'courseEnd';
+  }
+
+  /** Buy a powerup or sell a trinket. Returns an error message, or null when it worked. */
+  shop(playerId: string, action: 'buy' | 'sell', item: string): string | null {
+    if (!this.players.some((p) => p.id === playerId)) return 'Not in this run';
+    if (!this.shopOpen) return 'The shop is only open at rest stops';
+    const who = this.players.find((p) => p.id === playerId)?.name ?? '';
+    const by = this.players.length > 1 && who ? ` (${who})` : '';
+    if (action === 'buy') {
+      const def = POWERUPS[item as PowerupId];
+      if (!def) return 'Unknown item';
+      if (NEXT_HOLE_POWERUPS.includes(def.id) && this.hs.boosts.includes(def.id)) return 'Already bought';
+      if (this.hs.coins < def.price) return 'Not enough coins';
+      this.hs.coins -= def.price;
+      this.hs.coinsSpent += def.price;
+      this.hs.shopLog.push({ item: def.id, coins: def.price });
+      if (def.id === 'snack') this.heal(2);
+      else if (def.id === 'dice') this.hs.rerolls++;
+      else this.hs.boosts.push(def.id);
+      this.note(`🛒 ${def.icon} ${def.name} bought${by}`, 'good');
+    } else {
+      if (!isTrinket(item) || !this.has(item)) return 'You don’t have that trinket';
+      const price = sellPrice(item, this.lv(item));
+      this.removeTrinket(item);
+      this.hs.coins += price;
+      this.hs.shopLog.push({ item, coins: price, sold: true });
+      this.note(`🛒 ${TRINKETS[item].icon} ${TRINKETS[item].name} sold for ${price} coins${by}`, 'info');
+    }
+    this.changed();
+    return null;
+  }
+
+  /** The Jittery Glove wobbles every putt a little (unless Steady Hands holds it still). */
+  protected override aimShot(playerId: string, e: string, dirX: number, dirZ: number): [number, number] {
+    if (!this.has('jitter') || this.combo('steady')) return [dirX, dirZ];
+    const r = rng(
+      hashString(`jitter:${this.seed}:${this.hs.stage}:${playerId}:${this.shotsThisHole[e] ?? 0}`),
+    );
+    const a = (r() * 2 - 1) * ((JITTER_DEGREES * Math.PI) / 180);
+    const c = Math.cos(a),
+      sn = Math.sin(a);
+    return [dirX * c - dirZ * sn, dirX * sn + dirZ * c];
   }
 
   private grant(reward: RewardId): void {
@@ -331,7 +472,7 @@ export class HopperMatch extends Match {
         break;
       }
       case 'dust':
-        this.hs.dust += 12;
+        this.addDust(12);
         this.note('✨ +12 stardust', 'good');
         break;
       case 'vitality':
@@ -344,10 +485,10 @@ export class HopperMatch extends Match {
         break;
       case 'gamble': {
         const r = rng(hashString(`gamble:${this.seed}:${this.hs.stage}`));
-        const rares = TRINKET_IDS.filter((t) => TRINKETS[t].rare && !this.has(t));
+        const rares = TRINKET_IDS.filter((t) => TRINKETS[t].rare && !isCurse(t) && !this.has(t));
         if (rares.length && r() < 0.4) this.addTrinket(rares[Math.floor(r() * rares.length)]);
         else {
-          this.hs.dust += 25;
+          this.addDust(25);
           this.note('🎲 Mystery box: +25 stardust', 'good');
         }
         break;
@@ -360,7 +501,7 @@ export class HopperMatch extends Match {
     const idx = this.hs.stage;
     if (spec.kind === 'rest') {
       if (!this.restClaimed) {
-        this.hs.dust += 8;
+        this.addDust(8);
         this.note('⛳ Sunk it instead: +8 stardust tip', 'info');
       }
     } else {
@@ -372,6 +513,9 @@ export class HopperMatch extends Match {
       const bossPar = boss && small && this.clubhousePower() >= STRONG_CLUBHOUSE ? 1 : 0;
       let cleared = false;
       let counted = false;
+      let allGood = true;
+      let underPar = 0;
+      let bankHoled = false;
       for (const e of this.entrants) {
         const res = this.results[e][this.holeIndex];
         const connected = this.players.find((p) => p.id === e)?.connected ?? true;
@@ -381,36 +525,62 @@ export class HopperMatch extends Match {
         }
         counted = true;
         if (!res.pickedUp) cleared = true;
+        if (res.pickedUp || res.strokes > res.par) allGood = false;
+        if (!res.pickedUp && res.strokes < res.par) underPar++;
+        if (!res.pickedUp && res.bankContacts > 0) bankHoled = true;
         let d = res.pickedUp
           ? -[3, 2, 2, 1][this.lv('overtime')]
           : res.holeInOne
             ? 2
             : Math.max(-3, Math.min(small ? 1 : 2, res.par - bossPar - res.strokes));
         if (small && !res.pickedUp && d < 0 && spec.sector >= 1) d = Math.max(-3, d - 1);
+        // Greedy Gremlin: an over-par hole costs one more heart.
+        if (this.has('greed') && !res.pickedUp && res.strokes > res.par) d = Math.max(-4, d - 1);
         if (d > 0) d += this.lv('feeder');
         by[e] = d;
         net += d;
       }
-      const block = Math.min(-net, this.lv('shield') - this.shieldUsed);
+      const block = Math.min(-net, this.lv('shield') + (this.combo('fortress') ? 1 : 0) - this.shieldUsed);
       if (net < 0 && block > 0) {
         this.shieldUsed += block;
         net += block;
         this.note(`🛡️ Bogey Shield blocked ${block > 1 ? `${block} hearts` : 'a heart'}`, 'good');
       }
+      if (net < 0 && spec.boosts?.includes('bubble')) {
+        this.note(`🫧 The bubble popped: no hearts lost`, 'good');
+        net = 0;
+      }
       this.hs.hearts = Math.min(this.hs.maxHearts, this.hs.hearts + net);
       this.hs.lastDelta = { by, net };
+      if (counted && underPar && this.combo('birdbath')) {
+        this.addDust(4 * underPar);
+        this.note(`🛁 Bird Bath: +${4 * underPar} stardust`, 'good');
+      }
+      if (counted && bankHoled && this.combo('trickshot')) {
+        this.heal(1);
+        this.note('🎱 Trick Shot: +1 ❤️', 'good');
+      }
+      // Hot Streak: two holes in a row with the whole team at par or better.
+      this.streak = counted && allGood ? this.streak + 1 : 0;
+      const hot = this.lv('streak');
+      if (hot && this.streak >= 2) {
+        this.streak = 0;
+        const n = hot >= 3 ? 2 : 1;
+        this.heal(n);
+        if (hot >= 2) this.addDust(5);
+        this.note(`🔥 Hot Streak! +${n} ❤️${hot >= 2 ? ', +5 stardust' : ''}`, 'good');
+      }
       if (spec.reward) this.grant(spec.reward);
       if (boss && counted && !cleared) {
         // Nobody holed the boss: the run ends here, whatever hearts are left.
         this.lostToBoss = true;
         this.pendingEnd = 'lost';
       } else if (boss) {
-        this.hs.dust += 15;
-        if (small) this.note('☠️ Boss cleared! +15 stardust', 'epic');
-        else {
-          this.heal(1);
-          this.note('☠️ Boss cleared! +15 stardust, +1 ❤️', 'epic');
-        }
+        const dust = 15 + PRESTIGE.bossDustPerLoop * this.loop + 10 * this.lv('crown');
+        this.addDust(dust);
+        const heal = (small ? 0 : 1) + this.lv('crown');
+        this.heal(heal);
+        this.note(`☠️ Boss cleared! +${dust} stardust${heal ? `, +${heal} ❤️` : ''}`, 'epic');
       }
       if (!this.pendingEnd && this.hs.hearts <= 0) {
         if (this.hs.secondWind) {
@@ -424,8 +594,10 @@ export class HopperMatch extends Match {
         }
       }
     }
-    if (!this.pendingEnd && idx + 1 >= SKELETON.length) this.pendingEnd = 'won';
-    if (!this.pendingEnd && SKELETON[idx + 1].kind === 'hole') this.queue.push('route');
+    // The last boss of a loop: go round again (prestige) or cash out.
+    const lastOfLoop = (idx + 1) % SKELETON.length === 0;
+    if (!this.pendingEnd && lastOfLoop) this.queue.push('prestige');
+    else if (!this.pendingEnd && skeletonAt(idx + 1).kind === 'hole') this.queue.push('route');
     if (this.pendingEnd) this.queue = [];
     this.changed();
   }
@@ -451,7 +623,9 @@ export class HopperMatch extends Match {
       this.phase = 'courseEnd';
       this.note(
         this.pendingEnd === 'won'
-          ? '🏆 You conquered every planet!'
+          ? this.hs.prestige > 0
+            ? `🏆 Cashed out after ${this.hs.prestige + 1} laps of the planets!`
+            : '🏆 You conquered every planet!'
           : this.lostToBoss
             ? '☠️ The boss beat you: nobody holed out'
             : '💔 Out of hearts…',
@@ -472,14 +646,28 @@ export class HopperMatch extends Match {
     const i = this.hs.stage + 1;
     const spec = this.nextSpec ?? this.makeSpec(i, null, null, 0);
     this.nextSpec = null;
+    // Shop powerups ride on the next golf hole (Big Cup is part of the hole itself).
+    if (spec.kind !== 'rest' && this.hs.boosts.length) {
+      spec.boosts = [...this.hs.boosts];
+      if (spec.boosts.includes('fairweather') && spec.omen) {
+        spec.omen = null;
+        this.note('🌤️ Fair Weather: the omen blew over', 'good');
+      }
+      this.hs.boosts = [];
+    }
     this.hs.stages.push(spec);
     this.cfg.holes.push(stageHole(this.seed, i, spec));
     this.hs.stage = i;
     this.startHole(i);
   }
 
-  private openChoice(kind: 'trinket' | 'route'): boolean {
-    const options = kind === 'route' ? this.routeOptions() : this.trinketOptions();
+  private openChoice(kind: 'trinket' | 'route' | 'prestige'): boolean {
+    const options: ChoiceOption[] =
+      kind === 'route'
+        ? this.routeOptions()
+        : kind === 'prestige'
+          ? [{ action: 'prestige' }, { action: 'cashout' }]
+          : this.trinketOptions();
     if (!options.length) {
       if (kind === 'trinket') {
         this.hs.dust += 15;
@@ -490,7 +678,12 @@ export class HopperMatch extends Match {
     const solo = this.players.length === 1;
     this.hs.choice = {
       kind,
-      title: kind === 'route' ? 'Choose your route' : 'Choose a trinket',
+      title:
+        kind === 'route'
+          ? 'Choose your route'
+          : kind === 'prestige'
+            ? `Every planet conquered${this.hs.prestige ? ` ×${this.hs.prestige + 1}` : ''}!`
+            : 'Choose a trinket',
       options,
       votes: {},
       secondsLeft: solo ? -1 : VOTE_SECONDS,
@@ -504,7 +697,7 @@ export class HopperMatch extends Match {
   private routeOptions(): ChoiceOption[] {
     const i = this.hs.stage + 1;
     const r = rng(hashString(`fork:${this.seed}:${i}:${this.rerollsUsed}`));
-    const t = stageDepth(i) / 15;
+    const t = stageDepth(i) / 15 + PRESTIGE.omenPerLoop * loopOf(i);
     const n = 2 + (this.rank('cartographer') > 0 ? 1 : 0);
     const out: ChoiceOption[] = [];
     this.optionSpecs = [];
@@ -548,17 +741,22 @@ export class HopperMatch extends Match {
       ),
     );
     // New trinkets, plus level-ups of ones the team owns (below max level).
-    const pool = TRINKET_IDS.filter((t) => this.lv(t) < MAX_TRINKET_LEVEL);
+    const pool = TRINKET_IDS.filter((t) => this.lv(t) < maxLevelOf(t));
+    // Prestige loops make rare trinkets turn up more.
+    const rareWeight = RARE_WEIGHT * (1 + PRESTIGE.rarePerLoop * this.loop);
+    let curses = 0;
     const n = Math.min(pool.length, 3 + (this.rank('wide') > 0 ? 1 : 0));
     const out: ChoiceOption[] = [];
     let levelUps = 0;
     while (out.length < n && pool.length) {
       // Rares turn up a quarter as often; each level is rarer than the last (Lv2 uncommon, Lv3 rare).
       // At most one level-up per draft while new trinkets are left to offer.
-      const onlyNew = levelUps > 0 && pool.some((t) => this.lv(t) === 0);
+      const onlyNew = levelUps > 0 && pool.some((t) => this.lv(t) === 0 && !isCurse(t));
       const weights = pool.map(
         (t) =>
-          (onlyNew && this.lv(t) > 0 ? 0 : 1) * (TRINKETS[t].rare ? RARE_WEIGHT : 1) * LEVEL_UP_WEIGHT[this.lv(t)],
+          (onlyNew && this.lv(t) > 0 ? 0 : 1) *
+          (isCurse(t) ? (curses ? 0 : CURSE_WEIGHT) : TRINKETS[t].rare ? rareWeight : 1) *
+          LEVEL_UP_WEIGHT[this.lv(t)],
       );
       let x = r() * weights.reduce((a, b) => a + b, 0);
       let k = -1;
@@ -570,6 +768,7 @@ export class HopperMatch extends Match {
       if (k < 0) break;
       const t = pool.splice(k, 1)[0];
       if (this.lv(t) > 0) levelUps++;
+      if (isCurse(t)) curses++;
       out.push({ trinket: t, level: this.lv(t) + 1 });
     }
     return out;
@@ -638,6 +837,7 @@ export class HopperMatch extends Match {
     if (!c || this.hs.rerolls <= 0 || !this.players.some((p) => p.id === playerId)) return false;
     this.hs.rerolls--;
     this.rerollsUsed++;
+    if (c.kind === 'prestige') return false;
     c.options = c.kind === 'route' ? this.routeOptions() : this.trinketOptions();
     if (!c.options.length) {
       this.hs.choice = null;
@@ -678,6 +878,14 @@ export class HopperMatch extends Match {
     const opt = c.options[pick];
     this.hs.choice = null;
     if (c.kind === 'trinket' && opt.trinket) this.addTrinket(opt.trinket);
+    if (c.kind === 'prestige') {
+      if (opt.action === 'prestige') {
+        this.hs.prestige++;
+        this.heal(PRESTIGE.heal);
+        this.note(`🌟 Prestige ${this.hs.prestige}! The planets get tougher, and richer`, 'epic');
+        this.queue.push('route');
+      } else this.pendingEnd = 'won';
+    }
     if (c.kind === 'route') this.nextSpec = this.optionSpecs[pick] ?? null;
     // Trinkets picked after a fork was decided still shape that next hole.
     if (this.nextSpec) this.nextSpec.shaping = this.shaping();

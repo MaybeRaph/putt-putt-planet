@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SKELETON, computeBounds, obstacleSolids, windmillVisual, type Hole, type Vec3 } from '@ppp/shared';
+import { skeletonAt, computeBounds, obstacleSolids, windmillVisual, type Hole, type Vec3 } from '@ppp/shared';
 
 /** Timing and framing of the hole intro (seconds / metres). */
 export const INTRO = {
@@ -54,7 +54,7 @@ export function introPlan(o: {
   if (!o.fresh || o.disabled) return 'none';
   // Planet Hopper rest stops are a breather, not a hole: no card, no flyover, no input lock.
   // (The run's skeleton is fixed and hole i is stage i, so this never depends on a late score.)
-  if (o.courseId === 'hopper' && SKELETON[o.holeIndex]?.kind === 'rest') return 'none';
+  if (o.courseId === 'hopper' && skeletonAt(o.holeIndex).kind === 'rest') return 'none';
   return o.reducedMotion ? 'card' : 'fly';
 }
 

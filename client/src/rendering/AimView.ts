@@ -27,7 +27,9 @@ export class AimView {
   private readonly ticks: THREE.Mesh[] = [];
   private readonly ray = new THREE.Raycaster();
   palette: Palette = 'default';
-  private readonly MAX_DOTS = 28;
+  private readonly MAX_DOTS = 64;
+  /** v1.12 Planet Hopper Laser Sight level (0-3): a longer preview with extra bounces. */
+  laser = 0;
 
   constructor() {
     const shape = new THREE.Shape();
@@ -103,12 +105,13 @@ export class AimView {
     });
 
     // Dotted preview: estimated roll distance, capped, with a single reflection.
-    const travel = Math.min(5.5, 0.6 + power * 6.5);
+    const reach = 1 + 0.45 * this.laser;
+    const travel = Math.min(5.5 * reach, (0.6 + power * 6.5) * reach);
     const pts: THREE.Vector3[] = [];
     let origin = ball.clone();
     let d = dir.clone();
     let remaining = travel;
-    for (let bounce = 0; bounce < 2 && remaining > 0; bounce++) {
+    for (let bounce = 0; bounce < 2 + this.laser && remaining > 0; bounce++) {
       this.ray.set(origin, d);
       this.ray.far = remaining;
       const hit = this.ray.intersectObjects(colliders, false)[0];

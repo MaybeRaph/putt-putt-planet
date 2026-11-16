@@ -30,11 +30,15 @@ import {
   CASES,
   RARITY_INFO,
   isCaseId,
+  POWERUPS,
+  activeCombos,
+  type PowerupId,
 } from '@ppp/shared';
-import { WORLD_LABEL, heartsEl, trinketChip } from './HopperHud';
+import { WORLD_LABEL, comboChip, heartsEl, trinketChip } from './HopperHud';
+import { awardsEl } from './awards';
 import type { Game } from '../core/Game';
 import type { SessionPlayer } from '../core/Session';
-import { ACTION_LABELS, DEFAULT_KEYS, keyLabel, type Action } from '../core/settings';
+import { ACTION_LABELS, DEFAULT_KEYS, HUD_SCALE, keyLabel, type Action } from '../core/settings';
 import { h, clear, tweenNumber, relScore } from './dom';
 import { scorecard } from './Hud';
 import { audio } from '../audio/Audio';
@@ -1094,7 +1098,7 @@ export class Screens {
             'div',
             { class: 'muted' },
             hopper
-              ? `🪐 ${SKELETON.length} procedurally generated stages across 4 planets · shared hearts · the host's Clubhouse upgrades apply, and everyone's keepsake joins the team`
+              ? `🪐 ${SKELETON.length} procedurally generated stages across 4 planets · shared hearts · the host's Clubhouse upgrades and keepsake apply · prestige to go round again`
               : `${course.holes.length} holes · Par ${course.holes.reduce((a, x) => a + x.par, 0)}`,
           ),
         ),
@@ -1330,7 +1334,7 @@ export class Screens {
               }
             },
           },
-          c.unlock.type === 'case'
+          c.unlock.type === 'case' || c.slot === 'sticker'
             ? skinSwatch(c, 48)
             : h('i', {
                 class: `swatch big pat-${c.pattern ?? 'solid'}`,
@@ -1512,6 +1516,20 @@ export class Screens {
               '📋 Scorecard',
             )
           : null,
+        g.scene
+          ? h(
+              'button',
+              {
+                class: 'btn',
+                title: 'Hide the HUD and take a picture (P)',
+                onclick: () => {
+                  g.togglePause(false);
+                  g.scene?.enterPhoto();
+                },
+              },
+              '📸 Photo mode',
+            )
+          : null,
         h('button', { class: 'btn', onclick: () => this.settings(() => this.pause(), true) }, '⚙️ Settings'),
         online && g.room && g.room.hostId === g.profile.profile.id && g.room.players.length > 1
           ? h('button', { class: 'btn', onclick: () => this.playersModal() }, '👥 Players')
@@ -1663,12 +1681,42 @@ export class Screens {
         ]),
         slider('Camera sensitivity', 'camSensitivity', 0.3, 2),
         toggle('Invert camera Y', 'invertY'),
+        this.hudScaleSetting(),
       ),
       h('div', { class: 'col' }, h('h3', {}, 'Controls (click to remap)'), keys),
     );
     const el = h('div', { class: asOverlay ? 'modal wide' : 'screen' }, this.header('Settings', back), body);
     if (asOverlay) g.ui.showOverlay(el);
     else g.ui.showScreen(el);
+  }
+
+  /** v1.12 HUD size: 70%–140% with its value. */
+  private hudScaleSetting(): HTMLElement {
+    const g = this.game;
+    const pct = () => `${Math.round(g.settings.hudScale * 100)}%`;
+    const out = h('span', { class: 'muted setting-value' }, pct());
+    return h(
+      'label',
+      { class: 'setting', title: 'Size of the in-game HUD: hole card, scores, buttons and the power meter' },
+      h('span', {}, 'HUD size'),
+      h(
+        'span',
+        { class: 'setting-range' },
+        h('input', {
+          type: 'range',
+          min: HUD_SCALE.min,
+          max: HUD_SCALE.max,
+          step: 0.05,
+          value: g.settings.hudScale,
+          oninput: (e: Event) => {
+            g.settings.hudScale = Number((e.target as HTMLInputElement).value);
+            out.textContent = pct();
+            g.applySettings();
+          },
+        }),
+        out,
+      ),
+    );
   }
 
   /** Film grain: a 0-100 slider with its value (0 shows "Off"). */
@@ -1788,6 +1836,7 @@ export class Screens {
       ),
       score.mode !== 'daily' ? starsEl : null,
       scorecard(course, score, players),
+      awardsEl(score, (e) => this.entrantName(e, players)),
       h(
         'div',
         { class: 'res-rewards panel' },
@@ -1929,7 +1978,13 @@ export class Screens {
               h('span', { class: 'dust-big' }, `✨ ${dust}`),
               h('span', {}, `Runs ${hp.runs}`),
               h('span', {}, `Wins ${hp.wins}`),
-              h('span', {}, `Best stage ${hp.bestStage}/${SKELETON.length}`),
+              h(
+                'span',
+                {},
+                hp.bestStage > SKELETON.length
+                  ? `Best run ${hp.bestStage} stages 🌟`
+                  : `Best stage ${hp.bestStage}/${SKELETON.length}`,
+              ),
             ),
           ),
           h(
@@ -1959,7 +2014,7 @@ export class Screens {
         h(
           'h3',
           { class: 'section-title' },
-          `🎒 Keepsake — start every run with one trinket you've found (${discovered.length}/${TRINKET_IDS.length})`,
+          `🎒 Keepsake — start your runs with one trinket you've found; in co-op only the host's counts (${discovered.length}/${TRINKET_IDS.length})`,
         ),
         h('div', { class: 'panel' }, keepsakes),
         h('h3', { class: 'section-title' }, '🌩️ Omens you may meet'),
@@ -1970,6 +2025,10 @@ export class Screens {
         ),
       ),
     );
+  }
+
+  private entrantName(e: string, players: SessionPlayer[]): string {
+    return e === 'team' ? 'The team' : (players.find((p) => p.id === e)?.name ?? '?');
   }
 
   private hopperResults(
@@ -1983,6 +2042,11 @@ export class Screens {
     const won = hs.result === 'won';
     const cleared = hs.stage + (won ? 1 : 0);
     const spec = hs.stages[hs.stage];
+    const laps = hs.prestige + (won ? 1 : 0);
+    const pos = (hs.stage % SKELETON.length) + 1;
+    const combos = activeCombos(hs.trinkets);
+    const bought = hs.shopLog.filter((x) => !x.sold);
+    const soldFor = hs.shopLog.filter((x) => x.sold).reduce((a, x) => a + x.coins, 0);
     const starsEl = h('div', { class: 'hidden' }, h('span'), h('span'), h('span'));
     const xpNum = h('b', {}, '0');
     const coinNum = h('b', {}, '0');
@@ -2005,30 +2069,77 @@ export class Screens {
       h(
         'div',
         { class: `screen results hopper-results ${won ? 'won' : 'lost'}` },
-        h('h1', { class: 'res-title' }, won ? '🏆 Every planet conquered!' : '💔 Run over'),
+        h(
+          'h1',
+          { class: 'res-title' },
+          won ? (laps > 1 ? `🌟 ${laps} laps, cashed out!` : '🏆 Every planet conquered!') : '💔 Run over',
+        ),
         h(
           'div',
           { class: 'res-sub' },
           won
-            ? `All ${SKELETON.length} stages cleared`
-            : `Reached stage ${hs.stage + 1} of ${SKELETON.length} · ${WORLD_LABEL[spec?.world ?? 'meadow'] ?? ''} sector`,
+            ? `${cleared} stages cleared${laps > 1 ? ` · Prestige ${hs.prestige}` : ''}`
+            : `Reached stage ${pos} of ${SKELETON.length}${hs.prestige ? ` on prestige ${hs.prestige}` : ''} · ${WORLD_LABEL[spec?.world ?? 'meadow'] ?? ''} sector`,
         ),
         h(
           'div',
           { class: 'panel hop-summary' },
           h('div', { class: 'row' }, h('span', {}, 'Hearts'), heartsEl(Math.max(0, hs.hearts), hs.maxHearts)),
           h('div', { class: 'row' }, h('span', {}, 'Stages cleared'), h('b', {}, String(cleared))),
+          hs.prestige || laps > 1
+            ? h(
+                'div',
+                { class: 'row' },
+                h('span', {}, 'Prestige'),
+                h('b', {}, `🌟 ${hs.prestige} (${laps} laps won)`),
+              )
+            : null,
           h('div', { class: 'row' }, h('span', {}, 'Stardust found'), h('b', {}, `✨ ${hs.dust}`)),
+          h(
+            'div',
+            { class: 'row' },
+            h('span', {}, 'Shop coins'),
+            h(
+              'b',
+              {},
+              `🪙 ${hs.coinsEarned} picked up${soldFor ? ` + ${soldFor} from sales` : ''} · ${hs.coinsSpent} spent · ${hs.coins} left`,
+            ),
+          ),
+          bought.length
+            ? h(
+                'div',
+                { class: 'row shop-receipt' },
+                h('span', {}, 'Shop'),
+                h(
+                  'span',
+                  {},
+                  ...bought.map((x) => {
+                    const p = POWERUPS[x.item as PowerupId];
+                    return h(
+                      'span',
+                      { class: 'receipt-item', title: p?.desc ?? '' },
+                      `${p?.icon ?? '🛒'} ${p?.name ?? x.item} −${x.coins}`,
+                    );
+                  }),
+                ),
+              )
+            : null,
           h(
             'div',
             { class: 'row' },
             h('span', {}, 'Trinkets'),
             hs.trinkets.length
-              ? h('span', {}, ...hs.trinkets.map((t) => trinketChip(t, true, hs.levels?.[t] ?? 1)))
+              ? h(
+                  'span',
+                  {},
+                  ...hs.trinkets.map((t) => trinketChip(t, true, hs.levels?.[t] ?? 1)),
+                  ...combos.map((c) => comboChip(c)),
+                )
               : h('span', { class: 'muted' }, 'none'),
           ),
           ...strokes,
         ),
+        awardsEl(score, (e) => this.entrantName(e, players)),
         h(
           'div',
           { class: 'res-rewards panel' },

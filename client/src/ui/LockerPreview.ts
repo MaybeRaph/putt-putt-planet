@@ -126,7 +126,7 @@ export class LockerPreview {
     if (this.disposed) return;
     this.t += dt;
     const rolling = this.slot === 'ball' || this.slot === 'trail';
-    const closeUp = this.slot === 'hat' || this.slot === 'putter';
+    const closeUp = this.slot === 'hat' || this.slot === 'putter' || this.slot === 'sticker';
     if (this.ball) {
       if (rolling) {
         const a = this.t * 1.3;
@@ -147,6 +147,11 @@ export class LockerPreview {
       const a = -Math.PI / 2 + Math.sin(this.t * 0.45) * 1.1;
       this.camera.position.set(Math.cos(a) * 1.75, 0.62, -0.25 + Math.sin(a) * 1.75);
       this.camera.lookAt(0, 0.26, -0.22);
+    } else if (this.slot === 'sticker') {
+      // Show off the sticker side (it faces +Z), swaying a little either way.
+      const a = Math.PI / 2 + Math.sin(this.t * 0.6) * 0.55;
+      this.camera.position.set(Math.cos(a) * 0.9, 0.3, Math.sin(a) * 0.9);
+      this.camera.lookAt(0, 0.17, 0);
     } else if (closeUp) {
       this.camera.position.set(Math.cos(ca), 0.42, Math.sin(ca));
       this.camera.lookAt(0, 0.25, 0);

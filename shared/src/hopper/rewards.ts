@@ -8,6 +8,11 @@ export function stagesCleared(match: HopperMatch): number {
   return match.hs.stage + (match.hs.result === 'won' ? 1 : 0);
 }
 
+/** Full laps of the planets a run completed: prestige loops, plus the last one if it cashed out. */
+export function runLaps(match: HopperMatch): number {
+  return match.hs.prestige + (match.hs.result === 'won' ? 1 : 0);
+}
+
 /**
  * End of a Planet Hopper run for one player: the usual hole/coin XP plus depth XP, and the
  * run's stardust banked into the Clubhouse (won or lost, like any good roguelike).
@@ -27,23 +32,29 @@ export function applyHopperRun(
   run.completed = false;
   const { profile: p, grant } = applyRun(profile, run, null);
   const cleared = stagesCleared(match);
-  const won = match.hs.result === 'won';
-  const extra = cleared * 12 + (won ? 400 : 0);
+  // v1.12 prestige: every full lap of the planets counts as a win, cashed out or not.
+  const laps = runLaps(match);
+  const extra = cleared * 12 + laps * 400;
   if (extra > 0) {
     grant.xpItems.push({
-      label: won ? `🪐 Planet Hopper victory (${cleared} stages)` : `🪐 ${cleared} stages cleared`,
+      label:
+        laps > 1
+          ? `🌟 ${laps} laps of the planets (${cleared} stages)`
+          : laps === 1
+            ? `🪐 Planet Hopper victory (${cleared} stages)`
+            : `🪐 ${cleared} stages cleared`,
       xp: extra,
     });
     grant.xpTotal += extra;
     addXp(p, extra, grant);
   }
   const mult = 1 + 0.25 * upgradeRank(p.hopper, 'pockets');
-  const dust = Math.round(match.hs.dust * mult) + (won ? 50 : 0);
+  const dust = Math.round(match.hs.dust * mult) + laps * 50;
   p.hopper = {
     ...p.hopper,
     dustEarned: p.hopper.dustEarned + dust,
     runs: p.hopper.runs + 1,
-    wins: p.hopper.wins + (won ? 1 : 0),
+    wins: p.hopper.wins + laps,
     bestStage: Math.max(p.hopper.bestStage, cleared),
     discovered: [...new Set([...p.hopper.discovered, ...match.hs.trinkets])],
   };

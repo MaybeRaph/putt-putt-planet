@@ -250,7 +250,11 @@ export class Controls {
       }
       return;
     }
-    if (isDown && !e.repeat && ['overview', 'rescue', 'emote', 'chat', 'spectate', 'debug'].includes(action)) {
+    if (
+      isDown &&
+      !e.repeat &&
+      ['overview', 'rescue', 'emote', 'chat', 'spectate', 'photo', 'debug'].includes(action)
+    ) {
       e.preventDefault();
       this.host.onAction(action);
     }

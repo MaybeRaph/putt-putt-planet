@@ -27,7 +27,7 @@ import { Renderer } from '../rendering/Renderer';
 import { MenuBackdrop } from '../rendering/MenuBackdrop';
 import { UIRoot } from '../ui/UIRoot';
 import { ProfileStore } from '../progression/ProfileStore';
-import { loadSettings, saveSettings, type Settings } from './settings';
+import { applyHudScale, loadSettings, saveSettings, type Settings } from './settings';
 import { PlayScene } from './PlayScene';
 import { LocalSession } from '../physics/LocalSession';
 import type { Session } from './Session';
@@ -74,6 +74,7 @@ export class Game {
     this.renderer.setQuality(this.settings.quality);
     this.renderer.setGrain(this.settings.grain);
     this.renderer.setDynamicSun(this.settings.movingSun && !this.settings.reducedMotion);
+    applyHudScale(this.settings.hudScale);
     this.ui = new UIRoot(container);
     this.screens = new Screens(this);
     this.net = new NetClient(() => this.profile.profile);
@@ -617,6 +618,7 @@ export class Game {
     this.renderer.setGrain(this.settings.grain);
     this.renderer.setDynamicSun(this.settings.movingSun && !this.settings.reducedMotion);
     audio.setVolumes(this.settings.master, this.settings.music, this.settings.sfx);
+    applyHudScale(this.settings.hudScale);
     if (this.scene) {
       this.scene.hud.palette = this.settings.palette;
     }

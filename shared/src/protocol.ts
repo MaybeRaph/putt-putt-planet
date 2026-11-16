@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { RULES } from './config';
 import { ProfileSchema } from './profile';
-import { HopperStateSchema, StageSpecSchema } from './hopper/defs';
+import { HopperStateSchema, MAX_STAGES, StageSpecSchema } from './hopper/defs';
 
 /**
  * Wire protocol: JSON messages with a `t` discriminator. Every incoming message is validated
@@ -46,6 +46,12 @@ export const C2S = z.discriminatedUnion('t', [
   z.object({ t: z.literal('dailyStart') }),
   z.object({ t: z.literal('hopperVote'), option: z.number().int().min(0).max(8) }),
   z.object({ t: z.literal('hopperReroll') }),
+  /** v1.12 rest-stop shop: buy a powerup or sell a trinket (team coins). */
+  z.object({
+    t: z.literal('hopperShop'),
+    action: z.enum(['buy', 'sell']),
+    item: z.string().min(1).max(20),
+  }),
   z.object({ t: z.literal('dailyBoard') }),
   z.object({ t: z.literal('debugTeleport'), pos: z.tuple([num, num, num]) }),
 ]);
@@ -102,7 +108,12 @@ export const MatchEventSchema = z.discriminatedUnion('type', [
   e('turn', { player: z.string() }),
   e('penalty', { entrant: z.string(), reason: z.enum(['water', 'oob']) }),
   e('strokeLimit', { entrant: z.string() }),
-  e('entrantDone', { entrant: z.string(), strokes: z.number().int(), par: z.number().int() }),
+  e('entrantDone', {
+    entrant: z.string(),
+    strokes: z.number().int(),
+    par: z.number().int(),
+    shots: z.number().int().optional(),
+  }),
   e('collected', { item: z.string(), kind: Kind, by: z.string() }),
   e('rescueOffered', { entrant: z.string() }),
   e('holeComplete', { hole: z.number().int() }),
@@ -110,6 +121,20 @@ export const MatchEventSchema = z.discriminatedUnion('type', [
   e('note', { text: z.string().max(120), tone: z.enum(['good', 'bad', 'info', 'epic']) }),
   e('hopper'),
 ]);
+
+const MatchStatsSchema = z.object({
+  shots: z.number(),
+  power: z.number(),
+  wallHits: z.number(),
+  hazards: z.number(),
+  coins: z.number(),
+  gems: z.number(),
+  aces: z.number(),
+  birdies: z.number(),
+  pars: z.number(),
+  longest: z.number(),
+  rescues: z.number(),
+});
 
 export const ScoreStateSchema = z.object({
   mode: ModeSchema,
@@ -123,6 +148,7 @@ export const ScoreStateSchema = z.object({
   turn: z.string().nullable(),
   rescue: z.array(z.string()),
   collected: z.array(z.object({ item: z.string(), kind: Kind, hole: z.number().int(), by: z.string() })),
+  stats: z.record(z.string(), MatchStatsSchema).optional(),
   hopper: HopperStateSchema.optional(),
 });
 
@@ -177,7 +203,7 @@ export const S2C = z.discriminatedUnion('t', [
     tick: z.number().int(),
     st: z.number().int(),
     /** Planet Hopper: enough to regenerate every hole played so far. */
-    hopper: z.object({ seed: z.number().int(), stages: z.array(StageSpecSchema).max(64) }).optional(),
+    hopper: z.object({ seed: z.number().int(), stages: z.array(StageSpecSchema).max(MAX_STAGES) }).optional(),
   }),
   /** `tick` = hole-local sim tick (obstacle clock); `st` = monotonic server tick (clock sync). */
   z.object({

@@ -198,6 +198,11 @@ export const HoleSchema = z.object({
   powerScale: num.min(0.5).max(1.6).default(1),
   /** Constant wind acceleration on moving balls, [x, z] units/s^2. */
   wind: Vec2Schema.default([0, 0]),
+  /**
+   * v1.12 Homing Putts (Planet Hopper combo): a ball rolling towards the cup within a few metres
+   * has its path bent towards it by up to this many radians per second (speed is kept).
+   */
+  homing: num.min(0).max(3).default(0),
 });
 export type Hole = z.infer<typeof HoleSchema>;
 export type HoleInput = z.input<typeof HoleSchema>;

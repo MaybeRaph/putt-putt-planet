@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildSticker } from './stickers';
 import { COSMETIC_BY_ID, PHYSICS, type Loadout } from '@ppp/shared';
 import { canvasTexture, dimpleTexture, toon } from './materials';
 
@@ -717,6 +718,7 @@ export class BallView {
   private readonly putter: THREE.Group;
   private readonly trail: TrailRibbon;
   private readonly bodyMat: THREE.MeshPhysicalMaterial;
+  private readonly sticker: THREE.Mesh | null;
   private squash = 0;
   private squashDir = new THREE.Vector3(0, 1, 0);
   private putterSwing = 0;
@@ -767,6 +769,9 @@ export class BallView {
     this.body = new THREE.Mesh(new THREE.SphereGeometry(R, 32, 24), this.bodyMat);
     this.body.castShadow = !ghost;
     this.root.add(this.body);
+    // v1.12 sticker: a decal on the ball's side that rolls with it.
+    this.sticker = buildSticker(loadout.sticker ?? 'sticker.none', ghost);
+    if (this.sticker) this.body.add(this.sticker);
     if (fx === 'mythic') {
       this.mythic = new MythicFx(skin.color, skin.color2 ?? '#ffffff', this.bodyMat, map, ghost);
       this.root.add(this.mythic.group);
@@ -937,6 +942,10 @@ export class BallView {
     this.trail.dispose();
     this.mythic?.dispose();
     (this.glow?.material as THREE.Material | undefined)?.dispose();
+    if (this.sticker) {
+      this.sticker.geometry.dispose();
+      (this.sticker.material as THREE.Material).dispose();
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 /** Cosmetic catalog. Visuals live in the client; this is the data both sides agree on. */
 
-export type CosmeticSlot = 'ball' | 'trail' | 'putter' | 'hat' | 'victory' | 'hio';
+export type CosmeticSlot = 'ball' | 'trail' | 'putter' | 'hat' | 'victory' | 'hio' | 'sticker';
 
 /** Case regions: one case per planet (see cases.ts). */
 export type CaseId = 'meadow' | 'candy' | 'frozen' | 'clockwork' | 'space';
@@ -56,9 +56,16 @@ export interface Cosmetic {
    * mythic: animated holographic shell, pulsing aura, orbiting sparks and a stardust wake.
    */
   fx?: 'metal' | 'glow' | 'mythic';
+  /** v1.12 stickers: the art (an emoji, or a short word) and the print finish. */
+  glyph?: string;
+  finish?: StickerFinish;
 }
 
-export type PutterShape = 'blade' | 'mallet' | 'fang' | 'hammer' | 'hockey' | 'flamingo' | 'cane' | 'star' | 'rocket';
+/** Sticker print finishes, like the real thing: plain paper, rainbow holo, gold foil. */
+export type StickerFinish = 'paper' | 'holo' | 'gold';
+
+export type PutterShape =
+  'blade' | 'mallet' | 'fang' | 'hammer' | 'hockey' | 'flamingo' | 'cane' | 'star' | 'rocket';
 
 const C = (
   id: string,
@@ -146,8 +153,52 @@ export const COSMETICS: Cosmetic[] = [
   C('hio.hearts', 'hio', 'Hearts', '#ff4081', shop(250)),
   C('hio.stars', 'hio', 'Starburst', '#ffd740', ach('ace_collector')),
   C('hio.bubbles', 'hio', 'Bubbles', '#80d8ff', crate),
+  // Stickers (v1.12): the only plain one is "none"; the rest come out of cases.
+  C('sticker.none', 'sticker', 'No Sticker', '#000000', def),
   ...caseSkins(),
+  ...caseStickers(),
 ];
+
+/**
+ * v1.12 stickers: a decal slapped on the ball, like the stickers in a certain shooter's cases.
+ * Each case holds three: a paper one (common), a holo (rare) and a gold foil (epic).
+ */
+function caseStickers(): Cosmetic[] {
+  const st = (
+    cs: CaseId,
+    id: string,
+    name: string,
+    rarity: Rarity,
+    glyph: string,
+    color: string,
+  ): Cosmetic => ({
+    id: `sticker.${id}`,
+    slot: 'sticker',
+    name,
+    color,
+    glyph,
+    finish: rarity === 'common' ? 'paper' : rarity === 'rare' ? 'holo' : 'gold',
+    rarity,
+    unlock: { type: 'case', case: cs },
+  });
+  return [
+    st('meadow', 'gg', 'GG', 'common', 'GG', '#43a047'),
+    st('meadow', 'frog', 'Pond Frog (Holo)', 'rare', '🐸', '#66bb6a'),
+    st('meadow', 'clover', 'Lucky Clover (Gold)', 'epic', '🍀', '#ffc400'),
+    st('candy', 'yum', 'YUM!', 'common', 'YUM!', '#ec407a'),
+    st('candy', 'donut', 'Sprinkle Donut (Holo)', 'rare', '🍩', '#f48fb1'),
+    st('candy', 'unicorn', 'Unicorn (Gold)', 'epic', '🦄', '#ffc400'),
+    st('frozen', 'brr', 'BRR', 'common', 'BRR', '#29b6f6'),
+    st('frozen', 'penguin', 'Penguin (Holo)', 'rare', '🐧', '#4fc3f7'),
+    st('frozen', 'snowman', 'Snowman (Gold)', 'epic', '☃️', '#ffc400'),
+    st('clockwork', 'fore', 'FORE!', 'common', 'FORE!', '#b87333'),
+    st('clockwork', 'robot', 'Robot (Holo)', 'rare', '🤖', '#90a4ae'),
+    st('clockwork', 'crown', 'Crown (Gold)', 'epic', '👑', '#ffc400'),
+    st('space', 'ace', 'ACE', 'common', 'ACE', '#5e35b1'),
+    st('space', 'alien', 'Alien (Holo)', 'rare', '👽', '#7c4dff'),
+    st('space', 'rocket', 'Rocket (Gold)', 'epic', '🚀', '#ffc400'),
+  ];
+}
 
 /**
  * v1.11 case skins: they only come out of their planet's case. Each case holds 3 common,
@@ -231,6 +282,7 @@ export const DEFAULT_LOADOUT: Loadout = {
   hat: 'hat.cap',
   victory: 'victory.hop',
   hio: 'hio.confetti',
+  sticker: 'sticker.none',
 };
 
 export const SLOT_LABELS: Record<CosmeticSlot, string> = {
@@ -240,6 +292,7 @@ export const SLOT_LABELS: Record<CosmeticSlot, string> = {
   hat: 'Hats',
   victory: 'Victory',
   hio: 'Hole-in-One FX',
+  sticker: 'Stickers',
 };
 
 /** Sanitise a loadout coming from the network or storage. */

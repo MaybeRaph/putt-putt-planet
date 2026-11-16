@@ -272,6 +272,13 @@ export class Room {
           this.flushEvents();
         }
         break;
+      case 'hopperShop':
+        if (this.match instanceof HopperMatch) {
+          const err = this.match.shop(m.id, msg.action, msg.item);
+          if (err) this.error(m, 'shop', err);
+          this.flushEvents();
+        }
+        break;
       case 'hopperReroll':
         if (this.match instanceof HopperMatch) {
           this.match.reroll(m.id);
@@ -330,7 +337,8 @@ export class Room {
         seed: Math.floor(Math.random() * 2 ** 31),
         players,
         upgrades: host?.hopper.upgrades ?? {},
-        keepsakes: [...this.members.values()].map((m) => m.conn?.profile?.hopper.keepsake),
+        // v1.12: only the host's keepsake joins the run (one per player made co-op too easy).
+        keepsakes: [host?.hopper.keepsake],
         chaos: this.chaos,
       });
       this.match = match;

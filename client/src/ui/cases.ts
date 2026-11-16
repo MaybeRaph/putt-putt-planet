@@ -18,6 +18,7 @@ import {
 import type { Game } from '../core/Game';
 import { audio } from '../audio/Audio';
 import { skinTexture } from '../rendering/BallView';
+import { stickerCanvas } from '../rendering/stickers';
 import { h, clear } from './dom';
 import { LockerPreview } from './LockerPreview';
 
@@ -51,7 +52,10 @@ export function skinSwatch(c: Cosmetic, px = 64): HTMLElement {
   const ctx = cv.getContext('2d')!;
   const a = c.color,
     b = c.color2 ?? '#ffffff';
-  if (c.slot === 'ball') {
+  if (c.slot === 'sticker') {
+    const art = stickerCanvas(c.id);
+    if (art) ctx.drawImage(art, s * 0.04, s * 0.04, s * 0.92, s * 0.92);
+  } else if (c.slot === 'ball') {
     ctx.save();
     ctx.beginPath();
     ctx.arc(s / 2, s / 2, s * 0.42, 0, 7);
@@ -135,7 +139,12 @@ export function skinSwatch(c: Cosmetic, px = 64): HTMLElement {
   );
 }
 
-const SLOT_WORD: Partial<Record<CosmeticSlot, string>> = { ball: 'Ball', trail: 'Trail', putter: 'Putter' };
+const SLOT_WORD: Partial<Record<CosmeticSlot, string>> = {
+  ball: 'Ball',
+  trail: 'Trail',
+  putter: 'Putter',
+  sticker: 'Sticker',
+};
 const pct = (x: number) => (x >= 0.1 ? `${(x * 100).toFixed(0)}%` : `${(x * 100).toFixed(1)}%`);
 
 export function casesScreen(

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { holeArchetype, lastHoleSpecials } from '../src/hopper/generate';
-import { TRINKET_IDS } from '../src/hopper/defs';
+import { TRINKET_IDS, isCurse, type TrinketId } from '../src/hopper/defs';
 import {
   HopperMatch,
   SKELETON,
@@ -53,28 +53,16 @@ describe('Planet Hopper', () => {
     p.addTrinket('overtime'); // capped at Lv3
     expect(m.lv('overtime')).toBe(3);
     expect(m.strokeLimit()).toBe(m.hole.par + 4 + 7);
-    // Drafts offer level-ups of owned trinkets, never past Lv3.
-    for (const t of [
-      'magnet',
-      'glove',
-      'moth',
-      'feeder',
-      'bank',
-      'clover',
-      'pouch',
-      'ironheart',
-      'shield',
-      'socks',
-      'compass',
-    ])
-      p.addTrinket(t);
+    // Drafts offer level-ups of owned trinkets, never past Lv3 (curses have one level).
+    for (const t of TRINKET_IDS) if (t !== 'overtime' && !isCurse(t)) p.addTrinket(t);
     const opts = p.trinketOptions();
     expect(opts.length).toBe(3);
     for (const o of opts) {
       expect(o.trinket).not.toBe('overtime');
-      expect(o.level).toBe(2);
+      expect(o.level).toBe(isCurse(o.trinket as TrinketId) ? 1 : 2);
     }
-    for (const t of m.hs.trinkets) {
+    for (const t of TRINKET_IDS) {
+      p.addTrinket(t);
       p.addTrinket(t);
       p.addTrinket(t);
     }
@@ -82,7 +70,10 @@ describe('Planet Hopper', () => {
     // Shaping trinkets reach the generated hole at their level.
     const spec = m.makeSpec(1, null, null, 0);
     expect(spec.shaping.filter((t) => t === 'magnet').length).toBe(3);
-    expect(stageHole(5, 1, spec).cupScale).toBeCloseTo(1.65);
+    // (Without the Haunted Lantern curse, which widens the cup further.)
+    const noLantern = { ...spec, shaping: spec.shaping.filter((t) => t !== 'lantern') };
+    expect(stageHole(5, 1, noLantern).cupScale).toBeCloseTo(1.65);
+    expect(stageHole(5, 1, spec).cupScale).toBe(2);
   });
 
   it('offers each trinket level more rarely than the last', () => {
@@ -203,14 +194,14 @@ describe('Planet Hopper', () => {
       seed: 7,
       players,
       upgrades: { vigor: 1 },
-      keepsakes: ['magnet', 'magnet', 'nope'],
+      keepsakes: ['magnet', 'glove', 'nope'],
     });
     expect(m.hs.maxHearts).toBe(6 + 1);
-    // Two players with the same keepsake: it stacks into a level 2 trinket.
+    // v1.12: only the host's keepsake (the first) joins the run.
     expect(m.hs.trinkets).toEqual(['magnet']);
-    expect(m.hs.levels.magnet).toBe(2);
+    expect(m.hs.levels.magnet).toBe(1);
     m.startHole(0);
-    expect(m.hole.cupScale).toBeCloseTo(1.5);
+    expect(m.hole.cupScale).toBeCloseTo(1.35);
     const par = m.hole.par;
     // A aces (+2), B double-bogeys (-2): teammates cover each other.
     finishHole(m, (e) => (e === 'a' ? 1 : par + 2));

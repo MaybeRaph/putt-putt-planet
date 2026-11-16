@@ -62,6 +62,8 @@ export interface Session {
   /** Planet Hopper: vote for a fork/trinket option, or spend a reroll. */
   hopperVote(option: number): void;
   hopperReroll(): void;
+  /** v1.12 rest-stop shop. Local sessions answer with an error message (or null); online the host does. */
+  hopperShop(action: 'buy' | 'sell', item: string): string | null;
   /** Network stats for the debug overlay. */
   netStats(): Record<string, string | number>;
   timeScale: number;

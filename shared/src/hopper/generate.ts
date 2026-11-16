@@ -36,7 +36,15 @@ import {
 } from '../courses/builder';
 import { CASE_SPAWN_CHANCE, isCaseId } from '../cases';
 import { hashString, pick, range, rng } from '../rng';
-import { MAX_DEPTH, countLevel, type OmenId, type RewardId, type StageSpec, type TrinketId } from './defs';
+import {
+  MAX_DEPTH,
+  PRESTIGE,
+  countLevel,
+  type OmenId,
+  type RewardId,
+  type StageSpec,
+  type TrinketId,
+} from './defs';
 
 /**
  * Procedural holes for Planet Hopper. A hole is a pure function of (run seed, stage index,
@@ -82,8 +90,18 @@ export function worldTheme(world: string): Theme {
 /** Run level (0..3) of a hole-shaping trinket for this stage. */
 const lv = (spec: StageSpec, t: TrinketId) => countLevel(spec.shaping, t);
 
+/**
+ * Chance this stage hides a case (v1.12: base 1/13, more on prestige loops and with the Lucky
+ * Charm, capped). Pure function of the spec, so every player agrees.
+ */
+export function stageCaseChance(spec: StageSpec): number {
+  const loop = spec.loop ?? 0;
+  const luck = [1, 1.5, 2, 2.5][lv(spec, 'lucky')];
+  return Math.min(PRESTIGE.maxCaseChance, CASE_SPAWN_CHANCE * (1 + PRESTIGE.casePerLoop * loop) * luck);
+}
+
 /** Hole for one stage of a run. */
-export function stageHole(seed: number, index: number, spec: StageSpec, caseChance = CASE_SPAWN_CHANCE): Hole {
+export function stageHole(seed: number, index: number, spec: StageSpec, caseChance?: number): Hole {
   const input = spec.kind === 'rest' ? restHole(seed, index, spec) : golfHole(seed, index, spec);
   // Storm Compass softens omens by level; at Lv3 they have no effect at all.
   const g = lv(spec, 'compass');
@@ -92,6 +110,14 @@ export function stageHole(seed: number, index: number, spec: StageSpec, caseChan
   let powerScale = 1 + [0, 0.18, 0.26, 0.34][lv(spec, 'glove')];
   let wind: [number, number] = [0, 0];
   let gravityScale = 1;
+  const loop = spec.loop ?? 0;
+  const boosts = spec.boosts ?? [];
+  // v1.12: prestige loops shrink the cup a little; the Big Cup powerup and the Haunted Lantern
+  // widen it; the Jittery Glove hits harder (its wobble is applied to each putt by the match).
+  cupScale *= Math.max(PRESTIGE.minCup, 1 - PRESTIGE.cupPerLoop * loop);
+  if (boosts.includes('bigcup')) cupScale *= 1.5;
+  if (lv(spec, 'lantern')) cupScale *= 1.4;
+  if (lv(spec, 'jitter')) powerScale *= 1.3;
   const omen: OmenId | null = spec.omen;
   const r = rng(hashString(`hop-omen:${seed}:${index}`));
   switch (omen) {
@@ -144,8 +170,29 @@ export function stageHole(seed: number, index: number, spec: StageSpec, caseChan
     default:
       break;
   }
-  const collectibles = hideCase(seed, index, spec, input, caseChance);
-  return HoleSchema.parse({ ...input, collectibles, theme, cupScale, powerScale, wind, gravityScale });
+  // Haunted Lantern: every hole is foggy (an omen fog that is thicker still wins).
+  if (lv(spec, 'lantern') && !(omen === 'fog' && g < 2)) {
+    theme.fogNear = Math.min(theme.fogNear, 4.5);
+    theme.fogFar = Math.min(theme.fogFar, 17);
+    theme.fog = '#9d93b8';
+  }
+  // Combos (both trinkets ride in the shaping list): Steady Hands calms the wind, Homing Putts
+  // bends rolling balls towards the cup.
+  if (lv(spec, 'glove') && lv(spec, 'laser')) wind = [0, 0];
+  const homing = lv(spec, 'magnet') && lv(spec, 'compass') ? 1.1 : 0;
+  cupScale = Math.min(2, Math.max(0.5, cupScale));
+  powerScale = Math.min(1.6, Math.max(0.5, powerScale));
+  const collectibles = hideCase(seed, index, spec, input, caseChance ?? stageCaseChance(spec));
+  return HoleSchema.parse({
+    ...input,
+    collectibles,
+    theme,
+    cupScale,
+    powerScale,
+    wind,
+    gravityScale,
+    homing,
+  });
 }
 
 /**

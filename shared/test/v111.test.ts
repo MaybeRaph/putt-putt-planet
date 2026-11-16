@@ -39,7 +39,8 @@ describe('v1.11 cases: catalog', () => {
     expect(CASE_IDS).toEqual(['meadow', 'candy', 'frozen', 'clockwork', 'space']);
     const ids = new Set<string>();
     for (const id of CASE_IDS) {
-      const skins = caseSkins(id);
+      // v1.12 stickers share the case (3 per case) but aren't skins.
+      const skins = caseSkins(id).filter((s) => s.slot !== 'sticker');
       const count = (r: string) => skins.filter((s) => s.rarity === r).length;
       expect([count('common'), count('rare'), count('epic'), count('legendary'), count('mythic')]).toEqual([
         3, 2, 1, 1, 1,

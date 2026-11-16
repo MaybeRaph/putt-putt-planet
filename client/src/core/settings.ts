@@ -15,6 +15,7 @@ export type Action =
   | 'chat'
   | 'scoreboard'
   | 'spectate'
+  | 'photo'
   | 'debug';
 
 export const ACTION_LABELS: Record<Action, string> = {
@@ -31,6 +32,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   chat: 'Chat',
   scoreboard: 'Scoreboard',
   spectate: 'Switch who you watch',
+  photo: 'Photo mode',
   debug: 'Debug overlay',
 };
 
@@ -52,7 +54,18 @@ export interface Settings {
   showFps: boolean;
   /** On-screen readout of your connection's ping (online games only). */
   showPing: boolean;
+  /** v1.12: in-game HUD size, 0.7 (small) to 1.4 (big). */
+  hudScale: number;
   keys: Record<Action, string>;
+}
+
+export const HUD_SCALE = { min: 0.7, max: 1.4 } as const;
+
+/** Apply the HUD size (a CSS variable the in-game HUD zooms by). */
+export function applyHudScale(scale: number): void {
+  if (typeof document === 'undefined') return;
+  const k = Math.min(HUD_SCALE.max, Math.max(HUD_SCALE.min, Number(scale) || 1));
+  document.documentElement.style.setProperty('--hud-scale', String(k));
 }
 
 export const DEFAULT_KEYS: Record<Action, string> = {
@@ -69,6 +82,7 @@ export const DEFAULT_KEYS: Record<Action, string> = {
   chat: 'Enter',
   scoreboard: 'Tab',
   spectate: 'KeyF',
+  photo: 'KeyP',
   debug: 'Backquote',
 };
 
@@ -88,6 +102,7 @@ export const DEFAULT_SETTINGS: Settings = {
   invertY: false,
   showFps: false,
   showPing: false,
+  hudScale: 1,
   keys: { ...DEFAULT_KEYS },
 };
 

@@ -49,6 +49,37 @@ export interface HoleResult {
   bankContacts: number;
 }
 
+/** v1.12 per-entrant stats over the whole match, for the end-of-game awards. */
+export interface MatchStats {
+  shots: number;
+  /** Sum of shot powers (0-1), for the average. */
+  power: number;
+  wallHits: number;
+  hazards: number;
+  coins: number;
+  gems: number;
+  aces: number;
+  birdies: number;
+  pars: number;
+  /** Longest putt sunk, metres from where it was struck to the cup. */
+  longest: number;
+  rescues: number;
+}
+
+export const emptyStats = (): MatchStats => ({
+  shots: 0,
+  power: 0,
+  wallHits: 0,
+  hazards: 0,
+  coins: 0,
+  gems: 0,
+  aces: 0,
+  birdies: 0,
+  pars: 0,
+  longest: 0,
+  rescues: 0,
+});
+
 export interface CollectedItem {
   item: string;
   kind: CollectibleKind;
@@ -62,7 +93,8 @@ export type MatchEvent =
   | { type: 'turn'; player: string }
   | { type: 'penalty'; entrant: string; reason: 'water' | 'oob' }
   | { type: 'strokeLimit'; entrant: string }
-  | { type: 'entrantDone'; entrant: string; strokes: number; par: number }
+  /** `shots`: putts actually struck on the hole (a true hole-in-one is one shot, one stroke). */
+  | { type: 'entrantDone'; entrant: string; strokes: number; par: number; shots?: number }
   | { type: 'collected'; item: string; kind: CollectibleKind; by: string }
   | { type: 'rescueOffered'; entrant: string }
   | { type: 'holeComplete'; hole: number }
@@ -85,6 +117,8 @@ export interface ScoreState {
   collected: CollectedItem[];
   /** Planet Hopper run state (hopper mode only). */
   hopper?: HopperState;
+  /** v1.12 per-entrant match stats (awards). Optional: older hosts don't send them. */
+  stats?: Record<string, MatchStats>;
 }
 
 export type MatchPhase = 'playing' | 'holeEnd' | 'courseEnd';
@@ -111,6 +145,10 @@ export class Match {
   protected lastShooter: Record<string, string> = {};
   protected bankContacts: Record<string, number> = {};
   protected penalties: Record<string, number> = {};
+  /** Putts struck this hole per entrant (penalties and gimmes not included). */
+  protected shotsThisHole: Record<string, number> = {};
+  private shotFrom: Record<string, Vec3> = {};
+  readonly stats: Record<string, MatchStats> = {};
 
   constructor(cfg: MatchConfig) {
     this.cfg = cfg;
@@ -119,6 +157,7 @@ export class Match {
     for (const e of this.entrants) {
       this.card[e] = cfg.holes.map(() => null);
       this.results[e] = [];
+      this.stats[e] = emptyStats();
     }
     for (const p of this.players) this.shotsBy[p.id] = 0;
   }
@@ -151,7 +190,9 @@ export class Match {
     this.rescue.clear();
     this.bankContacts = {};
     this.penalties = {};
+    this.shotsThisHole = {};
     for (const e of this.entrants) {
+      this.shotsThisHole[e] = 0;
       this.sim.addBall(e);
       this.strokes[e] = 0;
       this.done[e] = false;
@@ -189,7 +230,16 @@ export class Match {
   shoot(playerId: string, dirX: number, dirZ: number, power: number): boolean {
     if (!this.canShoot(playerId)) return false;
     const e = this.entrantOf(playerId)!;
+    [dirX, dirZ] = this.aimShot(playerId, e, dirX, dirZ);
+    const from = this.sim.getBall(e)?.pos;
     if (!this.sim.shoot(e, dirX, dirZ, power)) return false;
+    if (from) this.shotFrom[e] = [from[0], from[1], from[2]];
+    this.shotsThisHole[e] = (this.shotsThisHole[e] ?? 0) + 1;
+    const st = this.stats[e];
+    if (st) {
+      st.shots++;
+      st.power += power;
+    }
     this.strokes[e]++;
     this.shotsBy[playerId] = (this.shotsBy[playerId] ?? 0) + 1;
     this.lastShooter[e] = playerId;
@@ -206,6 +256,7 @@ export class Match {
     if (!ball || ball.phase !== 'rest') return false;
     this.sim.placeBall(e, rescuePoint(this.hole.path, ball.pos));
     this.rescue.delete(e);
+    if (this.stats[e]) this.stats[e].rescues++;
     return true;
   }
 
@@ -259,10 +310,12 @@ export class Match {
         case 'wall':
         case 'bumper':
           this.bankContacts[e] = (this.bankContacts[e] ?? 0) + 1;
+          if (this.stats[e]) this.stats[e].wallHits++;
           break;
         case 'water':
         case 'oob':
           {
+            if (this.stats[e]) this.stats[e].hazards++;
             const pen = this.hazardPenalty(e);
             this.strokes[e] += pen;
             this.penalties[e] += pen;
@@ -287,6 +340,8 @@ export class Match {
           if (c) {
             const by = this.lastShooter[e] ?? (this.cfg.mode === 'relay' ? this.players[0].id : e);
             this.collected.push({ item: c.id, kind: c.kind, hole: this.holeIndex, by });
+            if (this.stats[e] && c.kind === 'coin') this.stats[e].coins++;
+            if (this.stats[e] && (c.kind === 'gem' || c.kind === 'golden')) this.stats[e].gems++;
             this.events.push({ type: 'collected', item: c.id, kind: c.kind, by });
             this.onCollected(c.id, c.kind, by);
           }
@@ -310,6 +365,10 @@ export class Match {
   }
 
   /** Hooks for rule variants (Planet Hopper trinkets/omens). */
+  /** The direction a putt actually goes (Planet Hopper's Jittery Glove wobbles it). */
+  protected aimShot(_playerId: string, _e: string, dirX: number, dirZ: number): [number, number] {
+    return [dirX, dirZ];
+  }
   protected hazardPenalty(_e: string): number {
     return RULES.hazardPenalty;
   }
@@ -343,15 +402,32 @@ export class Match {
       : Math.max(1, this.holedStrokes(e, this.strokes[e]));
     this.strokes[e] = strokes;
     this.card[e][this.holeIndex] = strokes;
+    const shots = this.shotsThisHole[e] ?? 0;
+    // A real ace: one putt struck and it dropped (not a bank-shot refund down to 1, not a gimme).
+    const ace = !pickedUp && !gimme && strokes === 1 && shots === 1;
     this.results[e][this.holeIndex] = {
       strokes,
       par: this.hole.par,
-      holeInOne: !pickedUp && strokes === 1,
+      holeInOne: ace,
       penalties: this.penalties[e],
       pickedUp,
       bankContacts: pickedUp ? 0 : this.bankContacts[e],
     };
-    this.events.push({ type: 'entrantDone', entrant: e, strokes, par: this.hole.par });
+    const st = this.stats[e];
+    if (st && !pickedUp) {
+      if (ace) st.aces++;
+      if (strokes < this.hole.par) st.birdies++;
+      else if (strokes === this.hole.par) st.pars++;
+      const from = this.shotFrom[e];
+      if (from && !gimme) {
+        const cup = this.hole.cup;
+        st.longest = Math.max(
+          st.longest,
+          Math.round(Math.hypot(from[0] - cup[0], from[2] - cup[2]) * 10) / 10,
+        );
+      }
+    }
+    this.events.push({ type: 'entrantDone', entrant: e, strokes, par: this.hole.par, shots });
   }
 
   protected checkHoleEnd(): void {
@@ -403,6 +479,7 @@ export class Match {
       turn: this.turn,
       rescue: [...this.rescue],
       collected: [...this.collected],
+      stats: structuredClone(this.stats),
     };
   }
 

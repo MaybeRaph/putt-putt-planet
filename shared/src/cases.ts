@@ -79,8 +79,11 @@ export const RARITY_INFO: Record<Rarity, { label: string; color: string; weight:
   mythic: { label: 'Mythic', color: '#ffc400', weight: 0.4 },
 };
 
-/** Chance a Planet Hopper golf stage hides a case: ~0.8 per 16-hole run. */
-export const CASE_SPAWN_CHANCE = 1 / 20;
+/**
+ * Chance a Planet Hopper golf stage hides a case: v1.12 1 in 13 (was 1 in 20), about 1.2 per
+ * 16-hole lap. Prestige loops and the Lucky Charm raise it (see stageCaseChance).
+ */
+export const CASE_SPAWN_CHANCE = 1 / 13;
 
 /** Better cases weight their epic and rarer skins up by this much. */
 const LUCK: Record<Rarity, number> = { common: 1, rare: 1.15, epic: 1.3, legendary: 1.5, mythic: 1.8 };

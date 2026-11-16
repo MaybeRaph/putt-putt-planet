@@ -6,7 +6,7 @@ import {
   caseOfItem,
   REST_CRATES,
   REWARDS,
-  SKELETON,
+  skeletonAt,
   type MatchEvent,
   type RewardId,
   type Vec3,
@@ -23,6 +23,8 @@ import { HoleIntro, introBlockers, introPlan } from '../rendering/HoleIntro';
 import { Particles } from '../rendering/Particles';
 import { Controls, type HostAction } from '../input/Controls';
 import { Hud } from '../ui/Hud';
+import { ShotRecorder, ReplayPlayer } from '../rendering/Replay';
+import { PHOTO_FILTERS, composePhoto, photoBar, savePhoto, type PhotoOptions } from '../ui/PhotoMode';
 import { pingReadout } from '../ui/ping';
 import { h, scoreName } from '../ui/dom';
 import { audio } from '../audio/Audio';
@@ -61,6 +63,15 @@ export class PlayScene {
   private introCardTimer = 0;
   /** Hole whose intro has been started (so it plays once per hole). */
   private introHole = -1;
+  /** v1.12: the path of my current putt, for hole-in-one replays. */
+  private readonly recorder = new ShotRecorder();
+  private replay: ReplayPlayer | null = null;
+  private replayEl: HTMLElement | null = null;
+  private replayTimer = 0;
+  private replayPending = false;
+  private myLastPhase = 'rest';
+  /** v1.12 photo mode (null when off). */
+  private photo: { el: HTMLElement; state: PhotoOptions & { hideBalls: boolean } } | null = null;
 
   constructor(
     private readonly game: Game,
@@ -85,6 +96,11 @@ export class PlayScene {
         onChat: (t) => this.session.sendChat(t),
         onVote: (i) => this.session.hopperVote(i),
         onReroll: () => this.session.hopperReroll(),
+        onShop: (a, item) => {
+          const err = this.session.hopperShop(a, item);
+          if (err) this.game.ui.toast(err, 'bad');
+          else audio.ui('buy');
+        },
         onSpectate: (dir) => this.cycleSpectate(dir),
       },
       session.kind === 'remote',
@@ -92,7 +108,8 @@ export class PlayScene {
     this.hud.palette = game.settings.palette;
 
     this.controls = new Controls(r.gl.domElement, r.camera, this.rig, game.settings, {
-      canAim: () => this.session.canShoot() && !this.game.paused && !this.intro,
+      canAim: () =>
+        this.session.canShoot() && !this.game.paused && !this.intro && !this.replay && !this.photo,
       ballPos: () => this.myBallView()?.pos ?? null,
       onShoot: (angle, power) => this.shoot(angle, power),
       onAction: (a) => this.onAction(a),
@@ -136,6 +153,8 @@ export class PlayScene {
   private loadHole(): void {
     const idx = this.session.holeIndex;
     if (idx < 0 || idx === this.loadedHole) return;
+    this.endReplay();
+    this.recorder.stop();
     this.loadedHole = idx;
     this.holeEndShown = false;
     this.view?.dispose();
@@ -237,6 +256,13 @@ export class PlayScene {
   }
 
   private readonly onIntroKey = (e: KeyboardEvent): void => {
+    if (this.replay && !this.game.paused && !this.game.ui.overlayOpen) {
+      if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key) || /^F\d+$/.test(e.key)) return;
+      e.stopPropagation();
+      e.preventDefault();
+      this.endReplay();
+      return;
+    }
     if (!this.intro || this.game.paused || this.game.ui.overlayOpen) return;
     if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key) || /^F\d+$/.test(e.key)) return;
     if ((e.target as HTMLElement | null)?.closest?.('input, textarea')) return;
@@ -247,6 +273,10 @@ export class PlayScene {
   };
 
   private readonly onIntroTap = (): void => {
+    if (this.replay && !this.game.paused && !this.game.ui.overlayOpen) {
+      this.endReplay();
+      return;
+    }
     if (!this.intro || this.game.paused || this.game.ui.overlayOpen) return;
     this.intro.skip();
   };
@@ -266,7 +296,11 @@ export class PlayScene {
   }
 
   private refreshScore(): void {
-    this.hud.updateScore(this.session.score(), this.session.myEntrant(), this.session.players());
+    const score = this.session.score();
+    this.hud.updateScore(score, this.session.myEntrant(), this.session.players());
+    // Laser Sight stretches the aim preview.
+    const hs = score.hopper;
+    this.aim.laser = hs?.trinkets.includes('laser') ? Math.min(3, hs.levels?.laser ?? 1) : 0;
   }
 
   // ------------------------------------------------------------------------------------------
@@ -305,7 +339,13 @@ export class PlayScene {
         this.session.reposition();
         break;
       case 'pause':
-        this.game.togglePause();
+        if (this.photo) this.exitPhoto();
+        else if (this.replay) this.endReplay();
+        else this.game.togglePause();
+        break;
+      case 'photo':
+        if (this.photo) this.exitPhoto();
+        else this.enterPhoto();
         break;
       case 'emote':
         this.hud.toggleWheel();
@@ -503,6 +543,17 @@ export class PlayScene {
             size: 0.1,
             gravity: -5,
           });
+        // v1.12: a real ace (one putt struck, straight in) gets a replay once the cheering's done.
+        if (mine && ace && ev.shots === 1 && this.recorder.usable) {
+          this.recorder.stop();
+          const hole = this.loadedHole;
+          clearTimeout(this.replayTimer);
+          this.replayPending = true;
+          this.replayTimer = window.setTimeout(() => {
+            this.replayPending = false;
+            if (this.loadedHole === hole) this.startReplay();
+          }, 1300);
+        }
         if (mine || this.session.mode === 'relay') {
           const name = scoreName(ev.strokes, ev.par);
           this.hud.message(name, ace ? 'epic' : ev.strokes <= ev.par ? 'good' : 'info', 2200);
@@ -597,7 +648,7 @@ export class PlayScene {
 
   /** A Planet Hopper rest stop (the run's skeleton is fixed and hole i is stage i). */
   private isRestStop(index = this.loadedHole): boolean {
-    return this.session.course.id === 'hopper' && SKELETON[index]?.kind === 'rest';
+    return this.session.course.id === 'hopper' && skeletonAt(index).kind === 'rest';
   }
 
   /** Rest stop crate labels and the wind gauge (Planet Hopper). */
@@ -721,7 +772,12 @@ export class PlayScene {
     this.controls.enabled = !this.game.paused;
     this.controls.update(dt);
     // Solo games freeze while paused; online games keep running for everyone else.
-    if (!(this.game.paused && this.session.kind === 'local')) this.session.update(dt);
+    // Solo games also hold still for photo mode and while an ace replay is coming up or playing
+    // (otherwise the next hole would load underneath it).
+    const frozen =
+      (this.game.paused || !!this.photo || !!this.replay || this.replayPending) &&
+      this.session.kind === 'local';
+    if (!frozen) this.session.update(dt);
     if (this.session.holeIndex !== this.loadedHole) this.loadHole();
     const view = this.view;
     if (!view) return;
@@ -735,8 +791,15 @@ export class PlayScene {
       seen.add(b.id);
       const bv = this.ensureBallView(b.id);
       const pos = v3(b.pos);
+      bv.visibleBall = !this.photo?.state.hideBalls;
       bv.update(pos, v3(b.vel), dt, b.phase === 'holed', rm);
       if (b.phase !== 'holed') positions.push(pos);
+      if (b.id === myId) {
+        // A new putt: my ball just left rest. Record its path for a possible ace replay.
+        if (b.phase === 'moving' && this.myLastPhase === 'rest') this.recorder.start(performance.now(), pos);
+        if (b.phase !== 'rest') this.recorder.sample(performance.now(), pos);
+        this.myLastPhase = b.phase;
+      }
       // labels for other players' balls
       if (b.id !== myId && b.id !== 'team')
         this.hud.label(
@@ -807,6 +870,10 @@ export class PlayScene {
       );
       if (this.intro.done) this.endIntro();
     }
+    if (this.replay) {
+      this.replay.update(this.game.paused ? 0 : dt, this.rig.camera, rm);
+      if (this.replay.done) this.endReplay();
+    }
     // Anything between the camera and the ball fades so you can always see your shot (during
     // the flyover: whatever hides the spot being shown).
     view.updateOcclusion(
@@ -827,7 +894,7 @@ export class PlayScene {
     this.session.timeScale = this.slowmo > 0 ? 0.4 : 1;
 
     // Aim visuals
-    const canShoot = this.session.canShoot() && !this.game.paused;
+    const canShoot = this.session.canShoot() && !this.game.paused && !this.replay && !this.photo;
     const myView = this.myBallView();
     if (canShoot && myView) {
       this.aim.show(
@@ -957,7 +1024,103 @@ export class PlayScene {
     this.particles.scale = this.renderer.quality === 'low' ? 0.5 : 1;
   }
 
+  // ------------------------------------------------------------------------------------------
+  // v1.12 hole-in-one replay
+  // ------------------------------------------------------------------------------------------
+
+  private startReplay(): void {
+    const me = this.balls.get(this.session.myEntrant());
+    if (this.replay || this.photo || !me || !this.recorder.usable) return;
+    const cup = v3(this.session.course.holes[this.loadedHole].cup);
+    this.replay = new ReplayPlayer(this.renderer.scene, this.recorder.frames, cup, me.loadout);
+    this.hud.root.classList.add('in-replay');
+    this.replayEl = h(
+      'div',
+      { class: 'replay-banner' },
+      h('div', { class: 'rb-tag' }, '● REPLAY'),
+      h('div', { class: 'rb-title' }, 'Hole in one!'),
+      h('div', { class: 'rb-skip' }, 'Click or press any key to skip'),
+    );
+    this.game.ui.hudLayer.append(this.replayEl);
+  }
+
+  private endReplay(): void {
+    clearTimeout(this.replayTimer);
+    this.replayPending = false;
+    if (!this.replay) return;
+    this.replay.dispose();
+    this.replay = null;
+    this.replayEl?.remove();
+    this.replayEl = null;
+    this.hud.root.classList.remove('in-replay');
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // v1.12 photo mode
+  // ------------------------------------------------------------------------------------------
+
+  /** Hide the HUD, freeze a solo game and let the camera roam; Snap saves a picture. */
+  enterPhoto(): void {
+    if (this.photo) return;
+    this.endIntro();
+    this.endReplay();
+    this.controls.cancelAim();
+    const hole = this.session.course.holes[this.loadedHole];
+    const state = {
+      filter: 'none' as PhotoOptions['filter'],
+      frame: true,
+      hideBalls: false,
+      caption: `${hole?.name ?? ''} · ${new Date().toLocaleDateString()}`,
+    };
+    const el = h(
+      'div',
+      { class: 'photo-layer' },
+      photoBar({
+        state,
+        onChange: () => this.applyPhotoLook(),
+        onSnap: () => void this.snapPhoto(),
+        onExit: () => this.exitPhoto(),
+      }),
+    );
+    this.photo = { el, state };
+    this.hud.root.classList.add('photo-hidden');
+    this.game.ui.hudLayer.append(el);
+    this.applyPhotoLook();
+  }
+
+  private applyPhotoLook(): void {
+    const css = PHOTO_FILTERS.find((f) => f.id === this.photo?.state.filter)?.css ?? 'none';
+    this.renderer.gl.domElement.style.filter = this.photo && css !== 'none' ? css : '';
+  }
+
+  exitPhoto(): void {
+    if (!this.photo) return;
+    this.photo.el.remove();
+    this.photo = null;
+    this.hud.root.classList.remove('photo-hidden');
+    this.applyPhotoLook();
+  }
+
+  private async snapPhoto(): Promise<void> {
+    if (!this.photo) return;
+    // Render a fresh frame and copy it out straight away, while the drawing buffer holds it.
+    this.renderer.render(0);
+    const pic = composePhoto(this.renderer.gl.domElement, this.photo.state);
+    const flash = h('div', { class: 'photo-flash' });
+    this.game.ui.hudLayer.append(flash);
+    setTimeout(() => flash.remove(), 600);
+    audio.ui('buy');
+    try {
+      const how = await savePhoto(pic);
+      this.game.ui.toast(how === 'shared' ? 'Photo ready to share!' : '📸 Photo saved', 'good');
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') this.game.ui.toast('Could not save the photo', 'bad');
+    }
+  }
+
   dispose(): void {
+    this.endReplay();
+    this.exitPhoto();
     this.unsub.forEach((u) => u());
     this.renderer.gl.domElement.removeEventListener('pointerdown', this.onDebugClick);
     window.removeEventListener('keydown', this.onIntroKey, true);

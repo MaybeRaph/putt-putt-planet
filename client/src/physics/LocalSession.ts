@@ -124,6 +124,12 @@ export class LocalSession implements Session {
     this.flush();
   }
 
+  hopperShop(action: 'buy' | 'sell', item: string): string | null {
+    return this.match instanceof HopperMatch
+      ? this.match.shop(this.localPlayerId, action, item)
+      : 'No shop here';
+  }
+
   hopperReroll(): void {
     if (this.match instanceof HopperMatch) this.match.reroll(this.localPlayerId);
     this.flush();

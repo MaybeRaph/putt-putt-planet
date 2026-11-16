@@ -27,6 +27,8 @@ export interface HudCallbacks {
   onChat(text: string): void;
   onVote(option: number): void;
   onReroll(): void;
+  /** Rest-stop shop: buy a powerup / sell a trinket. */
+  onShop(action: 'buy' | 'sell', item: string): void;
   /** Watch the next (1) or previous (-1) player still playing the hole. */
   onSpectate(dir: 1 | -1): void;
 }
@@ -211,7 +213,11 @@ export class Hud {
     );
     parent.appendChild(this.root);
     if (course.id === 'hopper')
-      this.hopper = new HopperHud(this.root, { vote: (i) => cb.onVote(i), reroll: () => cb.onReroll() });
+      this.hopper = new HopperHud(this.root, {
+        vote: (i) => cb.onVote(i),
+        reroll: () => cb.onReroll(),
+        shop: (a, item) => cb.onShop(a, item),
+      });
   }
 
   private readonly spectateBar: HTMLElement;

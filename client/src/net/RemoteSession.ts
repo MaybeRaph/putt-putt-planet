@@ -290,6 +290,11 @@ export class RemoteSession implements Session {
     this.net.send({ t: 'hopperVote', option });
   }
 
+  hopperShop(action: 'buy' | 'sell', item: string): string | null {
+    this.net.send({ t: 'hopperShop', action, item });
+    return null;
+  }
+
   hopperReroll(): void {
     this.net.send({ t: 'hopperReroll' });
   }

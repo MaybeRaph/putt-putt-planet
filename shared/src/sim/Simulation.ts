@@ -98,6 +98,9 @@ const PICKUP_RADIUS = 0.5;
  */
 export const CASE_PICKUP_RADIUS = 0.32;
 
+/** Homing Putts reach (metres from the cup). */
+export const HOMING_RANGE = 6;
+
 export class Simulation {
   readonly hole: Hole;
   readonly world: RAPIER.World;
@@ -523,6 +526,28 @@ export class Simulation {
     // Only pushes balls that are really rolling, so a slow ball can still settle.
     if ((wind[0] || wind[1]) && Math.hypot(v[0], v[2]) > 0.6)
       v = [v[0] + wind[0] * DT, v[1], v[2] + wind[1] * DT];
+    // Homing Putts: bend a ball that is rolling towards the cup a little further towards it.
+    // It turns the velocity without speeding it up, so it never adds energy.
+    const homing = this.hole.homing ?? 0;
+    if (homing > 0 && ground) {
+      const cup = this.hole.cup;
+      const dx = cup[0] - pos[0],
+        dz = cup[2] - pos[2];
+      const dist = Math.hypot(dx, dz);
+      const speed = Math.hypot(v[0], v[2]);
+      if (speed > 0.4 && dist > 0.12 && dist < HOMING_RANGE && Math.abs(cup[1] - pos[1]) < 1) {
+        const cosA = (v[0] * dx + v[2] * dz) / (speed * dist);
+        if (cosA > 0.2) {
+          const want = Math.atan2(dz, dx) - Math.atan2(v[2], v[0]);
+          const diff = Math.atan2(Math.sin(want), Math.cos(want));
+          const rate = homing * (1 - dist / HOMING_RANGE);
+          const turn = Math.max(-rate * DT, Math.min(rate * DT, diff));
+          const c = Math.cos(turn),
+            sn = Math.sin(turn);
+          v = [v[0] * c - v[2] * sn, v[1], v[0] * sn + v[2] * c];
+        }
+      }
+    }
     if (ground) {
       // Rolling resistance acts along the velocity, scaled by how flat the ground is.
       const speed = Math.hypot(v[0], v[1], v[2]);
